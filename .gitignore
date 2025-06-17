@@ -1,0 +1,4 @@
+__pycache__/
+.venv/
+wnba_game_data/
+wnba_predictions/

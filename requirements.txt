@@ -1,0 +1,38 @@
+# WNBA Daily Game Prediction System Requirements
+# Core dependencies for Points, Rebounds, Assists predictions
+
+# Web Framework
+streamlit>=1.28.0
+
+# Data Processing  
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Web Scraping
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+
+# Machine Learning
+scikit-learn>=1.3.0
+xgboost>=2.0.0
+lightgbm>=4.0.0
+
+# Deep Learning
+torch>=2.0.0
+
+# Visualization
+plotly>=5.15.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Statistical Analysis
+scipy>=1.10.0
+
+# Date/Time Handling
+python-dateutil>=2.8.0
+
+# Progress Bars
+tqdm>=4.65.0
+
+# Configuration
+pyyaml>=6.0
