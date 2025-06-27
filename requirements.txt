@@ -1,54 +1,35 @@
-# WNBA Daily Game Prediction System Dependencies
+# requirements.txt - WNBA Prediction System Dependencies
 
 # Core data processing
-pandas>=2.0.0
-numpy>=1.24.0
-scipy>=1.10.0
+pandas>=1.3.0
+numpy>=1.21.0
 
-# Web scraping and requests
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-lxml>=4.9.0
+# Machine learning
+scikit-learn>=1.0.0
+xgboost>=1.5.0
+lightgbm>=3.3.0
+torch>=1.10.0
 
-# Machine Learning
-scikit-learn>=1.3.0
-xgboost>=2.0.0
-lightgbm>=4.0.0
+# Web scraping and HTTP
+beautifulsoup4>=4.10.0
+requests>=2.26.0
 
-# Deep Learning
-torch>=2.0.0
-torchvision>=0.15.0
-
-# Visualization
-matplotlib>=3.7.0
-seaborn>=0.12.0
-plotly>=5.15.0
-
-# Web Dashboard
-streamlit>=1.28.0
-
-# Data validation and serialization
-pydantic>=2.0.0
-
-# Job management and model persistence
-joblib>=1.3.0
-
-# Configuration management
-python-dotenv>=1.0.0
+# Configuration and utilities  
 toml>=0.10.0
-
-# Date and time utilities
 python-dateutil>=2.8.0
 
-# Progress bars and CLI utilities
-tqdm>=4.65.0
-click>=8.1.0
+# Visualization and plotting
+matplotlib>=3.3.0
+seaborn>=0.11.0
 
-# Testing (optional)
-pytest>=7.4.0
-pytest-cov>=4.1.0
+# Dashboard and web interface
+streamlit>=1.2.0
+plotly>=5.3.0
 
-# Development tools (optional)
-black>=23.7.0
-flake8>=6.0.0
-mypy>=1.5.0
+# Model persistence
+joblib>=1.0.0
+
+# Optional: Development and testing
+pytest>=6.0.0
+black>=21.0.0
+flake8>=3.9.0

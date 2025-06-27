@@ -25,7 +25,7 @@ from pathlib import Path
 import logging
 from datetime import datetime
 
-from wnba_data_models import WNBAConfigurationError
+from data_models import WNBAConfigurationError
 
 
 @dataclass
@@ -44,7 +44,7 @@ class PredictionConfig:
         lookback_games (int): Number of recent games to use for form analysis
         min_games_for_stats (int): Minimum games required for statistical calculations
     """
-    target_stats: List[str] = field(default_factory=lambda: ["points", "rebounds", "assists"])
+    target_stats: List[str] = field(default_factory=lambda: ["points", "total_rebounds", "assists"])
     min_games_for_prediction: int = 5
     confidence_threshold: float = 0.6
     max_uncertainty: float = 10.0
@@ -61,7 +61,7 @@ class PredictionConfig:
         if not self.target_stats:
             raise WNBAConfigurationError("target_stats cannot be empty")
         
-        valid_stats = {"points", "rebounds", "assists", "steals", "blocks", "turnovers"}
+        valid_stats = {"points", "total_rebounds", "assists", "steals", "blocks", "turnovers"}
         invalid_stats = set(self.target_stats) - valid_stats
         if invalid_stats:
             raise WNBAConfigurationError(f"Invalid target stats: {invalid_stats}")
@@ -671,7 +671,7 @@ class ConfigLoader:
 
 [prediction]
 # Statistics to predict - can include: points, rebounds, assists, steals, blocks, turnovers
-target_stats = ["points", "rebounds", "assists"]
+target_stats = ["points", "total_rebounds", "assists"]
 
 # Minimum games a player must have played to generate predictions
 min_games_for_prediction = 5

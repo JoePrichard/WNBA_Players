@@ -1,36 +1,80 @@
-# 🏀 WNBA Daily Game Prediction System
+# WNBA Players Prediction & Analytics
 
-Advanced machine learning system for predicting WNBA player statistics (Points, Rebounds, Assists) with uncertainty quantification.
+A comprehensive pipeline for scraping, processing, and predicting WNBA player statistics using machine learning. This project fetches detailed player game logs, engineers features, trains ensemble models, and provides daily game predictions.
 
-## 🎯 Overview
+## Features
+- Scrapes full box score stats for all WNBA games (minutes, points, FG, 3P, FT, rebounds, assists, steals, blocks, turnovers, fouls, plus/minus, and more)
+- Cleans and engineers advanced features for modeling
+- Trains ensemble ML models (XGBoost, LightGBM, Random Forest, Neural Network)
+- Predicts player stats for upcoming games with uncertainty estimates
+- Exports predictions to CSV for further analysis or dashboarding
 
-This system implements state-of-the-art sports prediction techniques based on research from successful models like DARKO, XGBoost Synergy approaches, and Neural Networks with attention mechanisms. It provides daily predictions with confidence intervals and comprehensive model validation.
+## Installation
+1. **Clone the repository:**
+   ```bash
+   git clone <repo-url>
+   cd WNBA_Players
+   ```
+2. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+   *(If requirements.txt is missing, install: pandas, numpy, scikit-learn, xgboost, lightgbm, torch, beautifulsoup4, requests, streamlit, plotly)*
 
-### Key Features
+## File Structure
+- `data_fetcher.py` — Scrapes WNBA player stats from Basketball Reference
+- `data_models.py` — Data classes and configuration for stats, predictions, and validation
+- `feature_engineer.py` — Feature engineering for ML models
+- `prediction_models.py` — ML model training and prediction logic
+- `main_application.py` — Main pipeline: data fetch, train, predict, export
+- `dashboard.py` — (Optional) Streamlit dashboard for visualization
+- `model_validator.py` — Model evaluation and validation utilities
+- `config_loader.py` — Loads and validates configuration
+- `setup.py` — Project setup and utility scripts
 
-- **🤖 Ensemble ML Models**: XGBoost, LightGBM, Random Forest, Neural Networks
-- **📊 Advanced Features**: Recent form, opponent strength, team synergy, positional expectations
-- **🎯 Research-Based**: Targets Brier score < 0.12 (research benchmark)
-- **📈 Uncertainty Quantification**: 95% confidence intervals using Monte Carlo methods
-- **🕐 Time Series Validation**: Walk-forward validation simulating real-world usage
-- **🚀 Interactive Dashboard**: Streamlit-based interface for predictions and insights
-- **🔧 Modular Design**: Clean, documented, type-hinted Python codebase
+## Basic Usage
+All commands assume you are in the project root directory.
 
-## 📋 Prerequisites
-
-- **Python 3.8+** (required)
-- **Internet connection** (for data fetching)
-- **~2GB free space** (for models and data)
-
-## 🚀 Quick Start
-
-### Option 1: Automated Setup
-
+### 1. **Scrape WNBA Player Data**
+Fetch all player stats for a season (e.g., 2024):
 ```bash
-# Clone or download the project files
-# Run automated setup
-python setup.py
+python main_application.py --fetch-data 2024
+```
 
-# Follow the setup prompts, then:
-python wnba_main_application.py --full-pipeline 2025
-streamlit run wnba_dashboard.py
+### 2. **Train Prediction Models**
+Train models on the latest available data:
+```bash
+python main_application.py --train 2024
+```
+
+### 3. **Generate Predictions for Today**
+Predict player stats for today's scheduled games:
+```bash
+python main_application.py --predict
+```
+
+### 4. **Run the Full Pipeline**
+Fetch data, train models, and predict in one step:
+```bash
+python main_application.py --full-pipeline 2024
+```
+
+### 5. **Check Data Availability**
+See what data is available locally for a season:
+```bash
+python main_application.py --check-data 2024
+```
+
+### 6. **Launch the Dashboard (Optional)**
+If you want to visualize predictions:
+```bash
+streamlit run dashboard.py
+```
+
+## Notes
+- Data and model files are saved in `wnba_game_data/` and `wnba_models/` by default.
+- All outputs (predictions) are saved in `wnba_predictions/`.
+- The scraper uses Basketball Reference and may be subject to their request limits.
+
+## License
+MIT License 

@@ -2,7 +2,7 @@
 
 [prediction]
 # Target statistics to predict
-target_stats = ["points", "rebounds", "assists"]
+target_stats = ["points", "total_rebounds", "assists"]
 
 # Model configuration
 min_games_for_prediction = 5

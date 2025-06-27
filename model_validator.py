@@ -28,11 +28,11 @@ except ImportError:
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.calibration import calibration_curve
 
-from wnba_data_models import (
+from data_models import (
     ModelMetrics, PredictionConfig, WNBAModelError, WNBADataError
 )
-from wnba_prediction_models import WNBAPredictionModel
-from wnba_feature_engineer import WNBAFeatureEngineer
+from prediction_models import WNBAPredictionModel
+from feature_engineer import WNBAFeatureEngineer
 
 
 class WNBAModelValidator:

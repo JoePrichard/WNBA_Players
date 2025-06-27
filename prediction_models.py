@@ -30,11 +30,11 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-from wnba_data_models import (
+from data_models import (
     PlayerPrediction, ModelMetrics, PredictionConfig, ModelType,
     WNBAModelError, WNBAPredictionError
 )
-from wnba_feature_engineer import WNBAFeatureEngineer
+from feature_engineer import WNBAFeatureEngineer
 
 warnings.filterwarnings('ignore')
 
@@ -377,19 +377,33 @@ class WNBAPredictionModel:
         stat_name: str
     ) -> Tuple[Optional[StatsNeuralNetwork], Optional[ModelMetrics]]:
         """
-        Train neural network with uncertainty quantification.
+        Train neural network with uncertainty quantification - FIXED VERSION.
         
-        Args:
-            X_train: Training features
-            y_train: Training targets
-            X_test: Test features
-            y_test: Test targets
-            stat_name: Name of statistic
-            
-        Returns:
-            Tuple of (model, metrics) or (None, None) if training fails
+        CRITICAL FIX: Properly convert pandas Series/DataFrame to numpy arrays
         """
         try:
+            # FIXED: Ensure we have numpy arrays, not pandas Series/DataFrame
+            if hasattr(X_train, 'values'):
+                X_train = X_train.values
+            if hasattr(y_train, 'values'):
+                y_train = y_train.values
+            if hasattr(X_test, 'values'):
+                X_test = X_test.values
+            if hasattr(y_test, 'values'):
+                y_test = y_test.values
+            
+            # Ensure arrays are the right shape and type
+            X_train = np.asarray(X_train, dtype=np.float32)
+            y_train = np.asarray(y_train, dtype=np.float32)
+            X_test = np.asarray(X_test, dtype=np.float32)
+            y_test = np.asarray(y_test, dtype=np.float32)
+            
+            # Ensure y arrays are 1D
+            if y_train.ndim > 1:
+                y_train = y_train.ravel()
+            if y_test.ndim > 1:
+                y_test = y_test.ravel()
+            
             # Create datasets
             train_dataset = StatsDataset(X_train, y_train)
             test_dataset = StatsDataset(X_test, y_test)
@@ -480,6 +494,9 @@ class WNBAPredictionModel:
             
         except Exception as e:
             self.logger.warning(f"Neural network training failed: {e}")
+            # Print more detailed error for debugging
+            import traceback
+            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
             return None, None
 
     def train_all_models(self, game_logs_df: pd.DataFrame) -> Dict[str, Dict[str, ModelMetrics]]:
@@ -602,10 +619,10 @@ class WNBAPredictionModel:
                 opponent="unknown",
                 home_away="H",  # Would come from game context
                 predicted_points=predictions.get('points', 0.0),
-                predicted_rebounds=predictions.get('rebounds', 0.0),
+                predicted_rebounds=predictions.get('total_rebounds', 0.0),
                 predicted_assists=predictions.get('assists', 0.0),
                 points_uncertainty=uncertainties.get('points', 1.0),
-                rebounds_uncertainty=uncertainties.get('rebounds', 1.0),
+                rebounds_uncertainty=uncertainties.get('total_rebounds', 1.0),
                 assists_uncertainty=uncertainties.get('assists', 1.0),
                 confidence_score=confidence_score,
                 model_version=self.model_version

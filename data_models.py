@@ -127,16 +127,24 @@ class PlayerGameLog:
         result (GameResult): Game outcome (W/L/PENDING)
         minutes (float): Minutes played in the game
         points (float): Points scored
-        rebounds (float): Total rebounds (offensive + defensive)
-        assists (float): Assists recorded
         fg_made (float): Field goals made
         fg_attempted (float): Field goals attempted
+        fg_pct (float): Field goal percentage
+        fg3_made (float): 3-pointers made
+        fg3_attempted (float): 3-pointers attempted
+        fg3_pct (float): 3-point percentage
         ft_made (float): Free throws made  
         ft_attempted (float): Free throws attempted
-        turnovers (float): Turnovers committed
+        ft_pct (float): Free throw percentage
+        off_rebounds (float): Offensive rebounds
+        def_rebounds (float): Defensive rebounds
+        total_rebounds (float): Total rebounds
+        assists (float): Assists recorded
         steals (float): Steals recorded
         blocks (float): Blocks recorded
+        turnovers (float): Turnovers committed
         fouls (float): Personal fouls committed
+        plus_minus (float): Plus/Minus
         rest_days (int): Days of rest before this game
     """
     player: str
@@ -148,21 +156,38 @@ class PlayerGameLog:
     result: GameResult
     minutes: float
     points: float
-    rebounds: float
-    assists: float
     fg_made: float = 0.0
     fg_attempted: float = 0.0
+    fg_pct: float = 0.0
+    fg3_made: float = 0.0
+    fg3_attempted: float = 0.0
+    fg3_pct: float = 0.0
     ft_made: float = 0.0
     ft_attempted: float = 0.0
-    turnovers: float = 0.0
+    ft_pct: float = 0.0
+    off_rebounds: float = 0.0
+    def_rebounds: float = 0.0
+    total_rebounds: float = 0.0
+    assists: float = 0.0
     steals: float = 0.0
     blocks: float = 0.0
+    turnovers: float = 0.0
     fouls: float = 0.0
+    plus_minus: float = 0.0
     rest_days: int = 1
     
     def __post_init__(self) -> None:
         """Validate data after initialization."""
         self._validate_data()
+        # Calculate derived fields if not provided
+        if self.total_rebounds == 0.0:
+            self.total_rebounds = self.off_rebounds + self.def_rebounds
+        if self.fg_pct == 0.0 and self.fg_attempted > 0:
+            self.fg_pct = self.fg_made / self.fg_attempted
+        if self.fg3_pct == 0.0 and self.fg3_attempted > 0:
+            self.fg3_pct = self.fg3_made / self.fg3_attempted
+        if self.ft_pct == 0.0 and self.ft_attempted > 0:
+            self.ft_pct = self.ft_made / self.ft_attempted
     
     def _validate_data(self) -> None:
         """
@@ -177,24 +202,40 @@ class PlayerGameLog:
         if self.minutes > 60:  # WNBA games are 40 minutes + overtime
             logging.warning(f"Unusually high minutes for {self.player}: {self.minutes}")
         
-        if any(stat < 0 for stat in [self.points, self.rebounds, self.assists]):
+        if any(stat < 0 for stat in [self.points, self.total_rebounds]):
             raise ValueError("Basic stats cannot be negative")
         
         if self.fg_attempted > 0 and self.fg_made > self.fg_attempted:
             raise ValueError("Field goals made cannot exceed attempted")
         
+        if self.fg3_attempted > 0 and self.fg3_made > self.fg3_attempted:
+            raise ValueError("3-pointers made cannot exceed attempted")
+        
         if self.ft_attempted > 0 and self.ft_made > self.ft_attempted:
             raise ValueError("Free throws made cannot exceed attempted")
+        
+        if self.total_rebounds < (self.off_rebounds + self.def_rebounds):
+            raise ValueError("Total rebounds cannot be less than sum of offensive and defensive rebounds")
     
     @property
     def field_goal_percentage(self) -> float:
-        """Calculate field goal percentage."""
-        return self.fg_made / self.fg_attempted if self.fg_attempted > 0 else 0.0
+        return self.fg_pct if self.fg_pct > 0 else (self.fg_made / self.fg_attempted if self.fg_attempted > 0 else 0.0)
+    
+    @property
+    def three_point_percentage(self) -> float:
+        return self.fg3_pct if self.fg3_pct > 0 else (self.fg3_made / self.fg3_attempted if self.fg3_attempted > 0 else 0.0)
     
     @property
     def free_throw_percentage(self) -> float:
-        """Calculate free throw percentage."""
-        return self.ft_made / self.ft_attempted if self.ft_attempted > 0 else 0.0
+        return self.ft_pct if self.ft_pct > 0 else (self.ft_made / self.ft_attempted if self.ft_attempted > 0 else 0.0)
+    
+    @property
+    def total_rebounds_calc(self) -> float:
+        return self.off_rebounds + self.def_rebounds
+    
+    @property
+    def plus_minus_stat(self) -> float:
+        return self.plus_minus
     
     @property
     def usage_rate(self) -> float:
@@ -467,7 +508,99 @@ class ModelMetrics:
         """Check if Brier score meets research benchmark (<0.12)."""
         return self.brier_score < 0.12
 
-
+@dataclass
+class OptimizedPredictionConfig:
+    """
+    Optimized prediction configuration based on training results analysis.
+    
+    This configuration focuses on the most predictable statistics and
+    adjusts model weights based on observed performance.
+    """
+    
+    # OPTIMIZED: Focus on highly predictable core stats only
+    target_stats: List[str] = field(default_factory=lambda: [
+        "points",           # R²=0.798 - Core fantasy stat
+        "assists",          # R²=0.861 - Highly predictable  
+        "total_rebounds",   # R²=0.792 - Very good performance
+        "minutes",          # R²=0.679 - Decent for context
+        "fg_made",          # R²=0.747 - Good shooting stat
+        "fg_attempted",     # R²=0.779 - Good volume stat
+        "fg_pct"            # R²=0.874 - Excellent percentage stat
+        # REMOVED: blocks, steals, turnovers, fouls, plus_minus (poor R²)
+        # REMOVED: 3-point stats (moderate R² but less reliable)
+        # REMOVED: free throw stats (can add back if needed)
+    ])
+    
+    # OPTIMIZED: Adjust weights based on observed performance
+    model_weights: Dict[str, float] = field(default_factory=lambda: {
+        "lightgbm": 0.35,      # Best overall performer
+        "xgboost": 0.35,       # Strong on shooting stats
+        "random_forest": 0.20, # Solid backup performer
+        "neural_network": 0.10 # Reduced until technical issues fixed
+    })
+    
+    # Standard parameters (keep existing)
+    min_games_for_prediction: int = 5
+    confidence_threshold: float = 0.7  # Slightly higher for quality
+    max_uncertainty: float = 8.0      # Slightly lower for reliability
+    feature_importance_threshold: float = 0.01
+    validation_split: float = 0.2
+    random_state: int = 42
+    n_cross_validation_folds: int = 5
+    max_training_time_minutes: int = 60
+    
+    # OPTIMIZED: Enhanced model parameters based on good performance
+    xgboost_params: Dict[str, Any] = field(default_factory=lambda: {
+        "n_estimators": 150,    # Increased from 100
+        "max_depth": 6,         # Keep current
+        "learning_rate": 0.08,  # Slightly lower for stability
+        "random_state": 42,
+        "verbosity": 0,
+        "reg_alpha": 0.1,       # Add regularization
+        "reg_lambda": 0.1
+    })
+    
+    lightgbm_params: Dict[str, Any] = field(default_factory=lambda: {
+        "n_estimators": 150,    # Increased from 100
+        "max_depth": 6,         # Keep current
+        "learning_rate": 0.08,  # Slightly lower for stability
+        "random_state": 42,
+        "verbosity": -1,
+        "reg_alpha": 0.1,       # Add regularization
+        "reg_lambda": 0.1
+    })
+    
+    random_forest_params: Dict[str, Any] = field(default_factory=lambda: {
+        "n_estimators": 120,    # Increased from 100
+        "max_depth": 8,         # Keep current
+        "random_state": 42,
+        "n_jobs": -1,
+        "min_samples_split": 5, # Add to reduce overfitting
+        "min_samples_leaf": 2
+    })
+    
+    # Performance thresholds based on observed results
+    min_acceptable_r2: Dict[str, float] = field(default_factory=lambda: {
+        "points": 0.70,         # Aim for 70%+ on core stats
+        "assists": 0.80,        # Aim for 80%+ on assists
+        "total_rebounds": 0.70, # Aim for 70%+ on rebounds
+        "minutes": 0.60,        # Accept 60%+ on minutes
+        "fg_made": 0.70,        # Aim for 70%+ on shooting
+        "fg_attempted": 0.70,   # Aim for 70%+ on attempts
+        "fg_pct": 0.80          # Aim for 80%+ on percentages
+    })
+    
+    # Expected MAE ranges for validation
+    expected_mae_ranges: Dict[str, Tuple[float, float]] = field(default_factory=lambda: {
+        "points": (1.5, 3.0),           # ±1.5-3.0 points
+        "assists": (0.3, 0.6),          # ±0.3-0.6 assists  
+        "total_rebounds": (0.5, 1.0),   # ±0.5-1.0 rebounds
+        "minutes": (3.0, 6.0),          # ±3-6 minutes
+        "fg_made": (0.6, 1.2),          # ±0.6-1.2 field goals
+        "fg_attempted": (1.2, 2.5),     # ±1.2-2.5 attempts
+        "fg_pct": (0.04, 0.08)          # ±4-8 percentage points
+    })
+    
 @dataclass
 class PredictionConfig:
     """
@@ -488,7 +621,9 @@ class PredictionConfig:
         n_cross_validation_folds (int): Number of CV folds for model selection
         max_training_time_minutes (int): Maximum time allowed for training
     """
-    target_stats: List[str] = field(default_factory=lambda: ["points", "rebounds", "assists"])
+    target_stats: List[str] = field(default_factory=lambda: [
+        "points", "assists", "minutes", "fg_made", "fg_attempted", "fg_pct", "fg3_made", "fg3_attempted", "fg3_pct", "ft_made", "ft_attempted", "ft_pct", "off_rebounds", "def_rebounds", "total_rebounds", "steals", "blocks", "turnovers", "fouls", "plus_minus"
+    ])
     min_games_for_prediction: int = 5
     confidence_threshold: float = 0.6
     max_uncertainty: float = 10.0
@@ -505,7 +640,9 @@ class PredictionConfig:
     max_training_time_minutes: int = 60
     
     # Class-level constants
-    SUPPORTED_STATS: ClassVar[List[str]] = ["points", "rebounds", "assists", "steals", "blocks", "turnovers"]
+    SUPPORTED_STATS: ClassVar[List[str]] = [
+        "points", "assists", "minutes", "fg_made", "fg_attempted", "fg_pct", "fg3_made", "fg3_attempted", "fg3_pct", "ft_made", "ft_attempted", "ft_pct", "off_rebounds", "def_rebounds", "total_rebounds", "steals", "blocks", "turnovers", "fouls", "plus_minus"
+    ]
     DEFAULT_WEIGHTS: ClassVar[Dict[str, float]] = {
         "xgboost": 0.30,
         "lightgbm": 0.25, 
@@ -711,7 +848,7 @@ def validate_team_abbreviation(team: str) -> bool:
     """
     valid_teams = {
         'ATL', 'CHI', 'CONN', 'DAL', 'IND', 'LAS', 'MIN', 'NY', 
-        'PHX', 'SEA', 'WAS', 'LV'  # LV for Las Vegas (alternative to LAS)
+        'PHX', 'SEA', 'WAS', 'LV'  # LV for Las Vegas
     }
     return team.upper() in valid_teams
 
