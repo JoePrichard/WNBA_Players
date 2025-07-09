@@ -623,7 +623,7 @@ class PredictionConfig:
         max_training_time_minutes (int): Maximum time allowed for training
     """
     target_stats: List[str] = field(default_factory=lambda: [
-        "points", "assists", "minutes", "fg_made", "fg_attempted", "fg_pct", "fg3_made", "fg3_attempted", "fg3_pct", "ft_made", "ft_attempted", "ft_pct", "off_rebounds", "def_rebounds", "total_rebounds", "steals", "blocks", "turnovers", "fouls", "plus_minus"
+        "points", "assists", "total_rebounds"
     ])
     min_games_for_prediction: int = 5
     confidence_threshold: float = 0.6

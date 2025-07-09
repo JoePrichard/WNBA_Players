@@ -205,7 +205,7 @@ class WNBASetup:
 # Basic configuration file created by setup
 
 [prediction]
-target_stats = ["points", "rebounds", "assists"]
+target_stats = ["points", "total_rebounds", "assists"]
 min_games_for_prediction = 5
 confidence_threshold = 0.6
 

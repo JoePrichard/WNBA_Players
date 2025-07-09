@@ -22,6 +22,10 @@ class TeamNameMapper:
         "seattle storm": "SEA", "storm": "SEA", "sea": "SEA",
         "washington mystics": "WAS", "mystics": "WAS", "was": "WAS",
         "golden state valkyries": "GSV", "valkyries": "GSV", "gsv": "GSV",
+        # Add all valid uppercase abbreviations as keys mapping to themselves
+        "ATL": "ATL", "CHI": "CHI", "CON": "CON", "DAL": "DAL", "IND": "IND", "LAS": "LAS", "LVA": "LVA", "MIN": "MIN", "NYL": "NYL", "PHO": "PHO", "SEA": "SEA", "WAS": "WAS", "GSV": "GSV",
+        # Add all valid lowercase abbreviations as keys mapping to uppercase
+        "atl": "ATL", "chi": "CHI", "con": "CON", "dal": "DAL", "ind": "IND", "las": "LAS", "lva": "LVA", "min": "MIN", "nyl": "NYL", "pho": "PHO", "sea": "SEA", "was": "WAS", "gsv": "GSV",
     }
 
     _VALID_ABBRS = {
