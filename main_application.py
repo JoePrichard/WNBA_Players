@@ -1084,6 +1084,13 @@ Examples:
                 print(f"   Best models trained for: {list(results['summary']['best_models'].keys())}")
         
         elif args.predict:
+            # Attempt to load the latest trained models
+            try:
+                predictor.model_manager.load_latest_models()
+                print("✅ Loaded latest models")
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to load models: {e}. Using sample predictions.")
+            # Proceed with prediction generation
             schedule, is_real_data = predictor.data_manager.get_todays_schedule()
             if not schedule:
                 print(f"\n📅 No games scheduled for today")
