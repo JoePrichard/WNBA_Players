@@ -317,7 +317,6 @@ class WNBAFeatureEngineer:
         except Exception as e:
             self.logger.warning(f"Issue with home_away column processing: {e}, using default values")
             # Fallback: assume roughly 50% home games
-            import numpy as np
             np.random.seed(42)  # For reproducibility
             df['feature_home_boost'] = np.random.choice([0, 1], size=len(df), p=[0.5, 0.5])
         

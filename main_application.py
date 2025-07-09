@@ -1,20 +1,26 @@
-# main_application.py - WNBA Daily Game Prediction System (Improved Schedule Handling)
+# main_application.py - Enhanced WNBA Daily Game Prediction System
 #!/usr/bin/env python3
 """
-WNBA Daily Game Prediction System - Improved Schedule Handling Version
+Enhanced WNBA Daily Game Prediction System
 
-CRITICAL IMPROVEMENTS:
-- Better handling of schedule data validation
-- Clear warnings when sample data is used instead of real schedules
-- Improved error handling for schedule fetching failures
-- Enhanced logging for debugging schedule issues
-- Validation of schedule data before generating predictions
+This module provides a modular, easy-to-understand prediction system with:
+- Clear separation of concerns between data, models, and predictions
+- Comprehensive error handling and logging
+- Flexible configuration management
+- Multiple data source support with fallbacks
+- Clean, readable code structure
+
+Main Classes:
+    DataManager: Handles all data-related operations
+    ModelManager: Manages ML model training and persistence
+    PredictionManager: Generates and exports predictions
+    WNBADailyPredictor: Main orchestrator class
 """
 
 import pandas as pd
 import numpy as np
 from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 import logging
 import argparse
 import sys
@@ -22,516 +28,396 @@ import os
 from pathlib import Path
 import json
 import random
+from dataclasses import asdict
 
-# Add project directory to path
-try:
-    from utils import setup_project_structure, add_project_to_path, setup_logging
-    add_project_to_path()
-    setup_project_structure()
-except ImportError:
-    # Fallback if utils not available
-    current_dir = Path(__file__).parent
+# Add project directory to path if needed
+current_dir = Path(__file__).parent
+if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
-# Fixed imports with proper error handling
+# Enhanced imports with proper error handling
 try:
     from data_models import (
         GameSchedule, PlayerPrediction, PredictionConfig, HomeAway,
-        WNBADataError, WNBAModelError, WNBAPredictionError
+        WNBADataError, WNBAModelError, WNBAPredictionError,
+        validate_team_abbreviation
     )
-    from data_fetcher import WNBAStatsScraper  # For historical data only
-    from schedule_fetcher import WNBAScheduleFetcher  # For upcoming games
-    from prediction_models import WNBAPredictionModel
+    DATA_MODELS_AVAILABLE = True
 except ImportError as e:
-    print(f"Error importing required modules: {e}")
-    print("Please ensure all Python files are in the same directory")
-    sys.exit(1)
+    print(f"Error importing data_models: {e}")
+    DATA_MODELS_AVAILABLE = False
+
+try:
+    from data_fetcher import WNBAStatsScraper
+    DATA_FETCHER_AVAILABLE = True
+except ImportError as e:
+    print(f"Error importing data_fetcher: {e}")
+    DATA_FETCHER_AVAILABLE = False
+
+try:
+    from schedule_fetcher import WNBAScheduleFetcher
+    SCHEDULE_FETCHER_AVAILABLE = True
+except ImportError as e:
+    print(f"Error importing schedule_fetcher: {e}")
+    SCHEDULE_FETCHER_AVAILABLE = False
+
+try:
+    from prediction_models import WNBAPredictionModel
+    PREDICTION_MODELS_AVAILABLE = True
+except ImportError as e:
+    print(f"Error importing prediction_models: {e}")
+    PREDICTION_MODELS_AVAILABLE = False
+
+try:
+    from utils import setup_project_structure, setup_logging
+    UTILS_AVAILABLE = True
+except ImportError:
+    UTILS_AVAILABLE = False
 
 
-class WNBADailyPredictor:
+class DataManager:
     """
-    WNBA Daily Predictor - Improved Schedule Handling Version
+    Manages all data-related operations including fetching, loading, and validation.
     
-    This version includes better validation and handling of schedule data,
-    with clear warnings when sample data is used instead of real game schedules.
+    This class handles:
+    - Historical data fetching for training
+    - Schedule data for predictions
+    - Data validation and cleaning
+    - File management and persistence
     """
     
-    def __init__(
-        self,
-        config: Optional[PredictionConfig] = None,
-        data_dir: str = "wnba_game_data",
-        output_dir: str = "wnba_predictions"
-    ):
-        """Initialize the WNBA daily predictor with improved schedule handling."""
-        self.config = config or PredictionConfig()
-        self.data_dir = data_dir
-        self.output_dir = output_dir
+    def __init__(self, data_dir: str = "wnba_game_data"):
+        """
+        Initialize data manager.
         
-        # Initialize components with proper separation of concerns
-        try:
-            # For historical training data
-            self.data_fetcher = WNBAStatsScraper()
-        except Exception as e:
-            self.data_fetcher = None
-            logging.warning(f"Could not initialize data fetcher: {e}")
+        Args:
+            data_dir: Directory for storing data files
+        """
+        self.data_dir = Path(data_dir)
+        self.data_dir.mkdir(exist_ok=True)
         
-        try:
-            # For upcoming game schedules (CORRECT approach)
-            self.schedule_fetcher = WNBAScheduleFetcher()
-        except Exception as e:
-            self.schedule_fetcher = None
-            logging.warning(f"Could not initialize schedule fetcher: {e}")
+        self.logger = logging.getLogger(f"{__name__}.DataManager")
         
-        try:
-            self.prediction_model = WNBAPredictionModel(config=self.config)
-        except Exception as e:
-            self.prediction_model = None
-            logging.error(f"Could not initialize prediction model: {e}")
+        # Initialize data fetchers
+        self.stats_scraper = None
+        self.schedule_fetcher = None
         
-        # Create directories
-        os.makedirs(self.data_dir, exist_ok=True)
-        os.makedirs(self.output_dir, exist_ok=True)
+        if DATA_FETCHER_AVAILABLE:
+            try:
+                self.stats_scraper = WNBAStatsScraper()
+                self.logger.info("✅ Stats scraper initialized")
+            except Exception as e:
+                self.logger.warning(f"❌ Stats scraper failed: {e}")
         
-        # Setup logging
-        setup_logging(log_level="INFO", log_file="logs/wnba_main.log")
-        self.logger = logging.getLogger(__name__)
-
-    def check_data_availability(self, year: int) -> Dict[str, bool]:
-        """Check what data is available for a given year."""
-        self.logger.info(f"Checking data availability for {year}...")
-        local_files = {
-            'schedule': False,
-            'player_stats': False,
-            'player_game_logs': False,
-            'team_stats': False
+        if SCHEDULE_FETCHER_AVAILABLE:
+            try:
+                self.schedule_fetcher = WNBAScheduleFetcher()
+                self.logger.info("✅ Schedule fetcher initialized")
+            except Exception as e:
+                self.logger.warning(f"❌ Schedule fetcher failed: {e}")
+    
+    def check_data_availability(self, year: int) -> Dict[str, Any]:
+        """
+        Check what data is available for a given year.
+        
+        Args:
+            year: Year to check
+            
+        Returns:
+            Dictionary with availability information
+        """
+        self.logger.info(f"Checking data availability for {year}")
+        
+        availability = {
+            'year': year,
+            'files_found': [],
+            'total_records': 0,
+            'date_range': None,
+            'teams_found': [],
+            'data_quality': 'unknown'
         }
         
         try:
-            data_path = Path(self.data_dir)
-            if data_path.exists():
-                for file_path in data_path.glob(f"*{year}*.csv"):
-                    filename = file_path.name.lower()
-                    if 'schedule' in filename:
-                        local_files['schedule'] = True
-                    elif 'player' in filename and ('game' in filename or 'log' in filename):
-                        local_files['player_game_logs'] = True
-                    elif 'player' in filename:
-                        local_files['player_stats'] = True
-                    elif 'team' in filename:
-                        local_files['team_stats'] = True
+            # Look for data files
+            pattern = f"*{year}*.csv"
+            data_files = list(self.data_dir.glob(pattern))
+            
+            for file_path in data_files:
+                try:
+                    df = pd.read_csv(file_path)
+                    file_info = {
+                        'filename': file_path.name,
+                        'records': len(df),
+                        'columns': len(df.columns),
+                        'size_mb': file_path.stat().st_size / (1024 * 1024)
+                    }
+                    availability['files_found'].append(file_info)
+                    availability['total_records'] += len(df)
+                    
+                    # Extract teams if possible
+                    team_columns = [col for col in df.columns if 'team' in col.lower()]
+                    for col in team_columns:
+                        teams = df[col].dropna().unique()
+                        availability['teams_found'].extend(teams)
+                    
+                except Exception as e:
+                    self.logger.debug(f"Error reading {file_path}: {e}")
+            
+            # Remove duplicates from teams
+            availability['teams_found'] = list(set(availability['teams_found']))
+            
+            # Assess data quality
+            if availability['total_records'] > 1000:
+                availability['data_quality'] = 'good'
+            elif availability['total_records'] > 100:
+                availability['data_quality'] = 'fair'
+            else:
+                availability['data_quality'] = 'poor'
+            
         except Exception as e:
             self.logger.error(f"Error checking data availability: {e}")
         
-        self.logger.info(f"Data availability for {year}: {local_files}")
-        return local_files
-
+        return availability
+    
     def fetch_season_data(self, year: int, force_refresh: bool = False) -> Dict[str, str]:
         """
-        Fetch and save season data (HISTORICAL data for training).
+        Fetch historical season data for training.
         
-        IMPORTANT: This is for training data, not for getting today's schedule.
+        Args:
+            year: Year to fetch data for
+            force_refresh: Whether to force re-fetch existing data
+            
+        Returns:
+            Dictionary mapping data types to file paths
         """
-        self.logger.info(f"Fetching season data for {year}...")
+        self.logger.info(f"Fetching season data for {year}")
+        
         file_paths = {}
         
-        if not self.data_fetcher:
-            raise WNBADataError("Data fetcher not initialized")
+        # Check if we already have data
+        if not force_refresh:
+            existing_files = list(self.data_dir.glob(f"*{year}*.csv"))
+            if existing_files:
+                self.logger.info(f"Found {len(existing_files)} existing files for {year}")
+                for file_path in existing_files:
+                    file_paths[file_path.stem] = str(file_path)
+                return file_paths
+        
+        # Fetch new data
+        if not self.stats_scraper:
+            raise WNBADataError("Stats scraper not available")
         
         try:
-            # Check existing files first
-            if not force_refresh:
-                existing_files = list(Path(self.data_dir).glob(f"*{year}*.csv"))
-                if existing_files:
-                    self.logger.info(f"Found {len(existing_files)} existing data files for {year}")
-                    for file_path in existing_files:
-                        filename = file_path.name.lower()
-                        if 'schedule' in filename:
-                            file_paths["schedule"] = str(file_path)
-                        elif 'player' in filename and ('game' in filename or 'log' in filename):
-                            file_paths["player_game_logs"] = str(file_path)
-                        elif 'player' in filename:
-                            file_paths["player_stats"] = str(file_path)
-                        elif 'team' in filename:
-                            file_paths["team_stats"] = str(file_path)
-                    if file_paths:
-                        return file_paths
+            # Define season date range
+            start_date = f"{year}-05-01"  # WNBA typically starts in May
+            end_date = f"{year}-10-31"    # Ends in October
             
-            # Fetch new player stats for the season (HISTORICAL data)
-            start_date = f"{year}-05-01"  # Typical WNBA season start
-            end_date = f"{year}-09-30"    # Typical WNBA season end
+            self.logger.info(f"Fetching data from {start_date} to {end_date}")
             
-            try:
-                player_stats_df = self.data_fetcher.scrape_date_range(start_date, end_date)
-                if not player_stats_df.empty:
-                    player_path = self.data_fetcher.save_to_csv(player_stats_df, f"player_stats_{year}.csv")
-                    file_paths["player_stats"] = player_path
-                    self.logger.info(f"✅ Player stats: {len(player_stats_df)} records")
-                else:
-                    self.logger.warning(f"No player stats found for {year}")
-            except Exception as e:
-                self.logger.error(f"Failed to fetch player stats: {e}")
-                # Continue without failing completely
+            # Fetch player stats
+            stats_df = self.stats_scraper.scrape_date_range(start_date, end_date)
             
-            return file_paths
-            
-        except Exception as e:
-            raise WNBADataError(f"Season data fetch failed: {e}")
-
-    def load_game_logs(self, file_path: Optional[str] = None) -> pd.DataFrame:
-        """Load game logs from file with improved validation and error handling."""
-        try:
-            if file_path and os.path.exists(file_path):
-                target_file = file_path
+            if not stats_df.empty:
+                filename = f"wnba_stats_{year}.csv"
+                file_path = self.stats_scraper.save_to_csv(stats_df, filename)
+                file_paths["player_stats"] = file_path
+                self.logger.info(f"✅ Saved {len(stats_df)} records to {filename}")
             else:
-                # Prefer wnba_game_data/wnba_stats.csv if it exists
-                default_stats_path = os.path.join('wnba_game_data', 'wnba_stats.csv')
-                if os.path.exists(default_stats_path):
-                    target_file = default_stats_path
-                else:
-                    # Fallback to finding any CSV file
-                    data_files = list(Path(self.data_dir).glob("*.csv"))
-                    if not data_files:
-                        raise WNBADataError(f"No data files found in {self.data_dir}")
-                    
-                    # Prioritize files by name
-                    for pattern in ['*player*log*', '*player*stat*', '*game*', '*.csv']:
-                        matching_files = list(Path(self.data_dir).glob(pattern))
-                        if matching_files:
-                            target_file = max(matching_files, key=lambda x: x.stat().st_mtime)
-                            break
-                    else:
-                        target_file = max(data_files, key=lambda x: x.stat().st_mtime)
-                    
-                    self.logger.info(f"Using data file: {target_file.name}")
+                self.logger.warning(f"❌ No data found for {year}")
+        
+        except Exception as e:
+            self.logger.error(f"Failed to fetch season data: {e}")
+            raise WNBADataError(f"Season data fetch failed: {e}")
+        
+        return file_paths
+    
+    def load_game_logs(self, file_path: Optional[str] = None) -> pd.DataFrame:
+        """
+        Load game logs from file with validation.
+        
+        Args:
+            file_path: Specific file to load, or None for auto-detection
             
-            # Load and validate data
+        Returns:
+            Cleaned and validated game logs DataFrame
+        """
+        self.logger.info("Loading game logs")
+        
+        # Find file to load
+        if file_path and Path(file_path).exists():
+            target_file = Path(file_path)
+        else:
+            # Find most recent data file
+            data_files = list(self.data_dir.glob("*.csv"))
+            if not data_files:
+                raise WNBADataError(f"No data files found in {self.data_dir}")
+            
+            # Prefer files with 'stats' in name, then by modification time
+            stats_files = [f for f in data_files if 'stats' in f.name.lower()]
+            if stats_files:
+                target_file = max(stats_files, key=lambda x: x.stat().st_mtime)
+            else:
+                target_file = max(data_files, key=lambda x: x.stat().st_mtime)
+        
+        self.logger.info(f"Loading data from: {target_file.name}")
+        
+        try:
+            # Load data
             df = pd.read_csv(target_file)
-            self.logger.info(f"Loaded data: {len(df)} records from {target_file}")
             
             if df.empty:
                 raise WNBADataError("Data file is empty")
             
-            # Validate and convert data format
-            df = self._validate_and_convert_data(df)
+            # Clean and validate data
+            df = self._clean_game_logs(df)
+            
+            self.logger.info(f"✅ Loaded {len(df)} records for {df.get('player', df.iloc[:, 0]).nunique()} entities")
             
             return df
             
         except Exception as e:
-            raise WNBADataError(f"Failed to load data: {e}")
-
-    def _validate_and_convert_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Validate and convert data to expected format for player game logs."""
-        self.logger.info("Validating and converting data format...")
+            raise WNBADataError(f"Failed to load game logs: {e}")
+    
+    def _clean_game_logs(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Clean and standardize game logs data.
         
-        # Import utilities for data conversion
-        try:
-            from utils import standardize_team_name, clean_player_name, safe_float_conversion
-        except ImportError:
-            # Fallback functions if utils not available
-            def standardize_team_name(team): return str(team).upper()
-            def clean_player_name(name): return str(name).strip()
-            def safe_float_conversion(val, default=0.0):
-                try: return float(val) if pd.notna(val) else default
-                except: return default
-        
-        # Enhanced column mapping for Basketball Reference data
-        column_mapping = {
-            # Standard mappings
-            'player': ['player', 'Player', 'name', 'Name', 'player_name'],
-            'team': ['team', 'Team', 'tm', 'Tm', 'team_id'],
-            'date': ['date', 'Date', 'game_date', 'Date_game'],
-            'opponent': ['opponent', 'Opponent', 'opp', 'Opp', 'vs'],
-            'home_away': ['home_away', 'Home_Away', 'location', 'venue'],
-            'minutes': ['minutes', 'Minutes', 'mp', 'MP', 'min'],
-            'points': ['points', 'Points', 'pts', 'PTS'],
-            'total_rebounds': ['rebounds', 'Rebounds', 'trb', 'TRB', 'reb', 'total_rebounds'],
-            'assists': ['assists', 'Assists', 'ast', 'AST'],
+        Args:
+            df: Raw DataFrame
             
-            # Additional Basketball Reference columns
-            'fg_made': ['fg', 'FG', 'fg_made'],
-            'fg_attempted': ['fga', 'FGA', 'fg_attempted'],
-            'fg_pct': ['fg%', 'FG%', 'fg_pct'],
-            'fg3_made': ['3p', '3P', 'fg3_made'],
-            'fg3_attempted': ['3pa', '3PA', 'fg3_attempted'],
-            'fg3_pct': ['3p%', '3P%', 'fg3_pct'],
-            'ft_made': ['ft', 'FT', 'ft_made'],
-            'ft_attempted': ['fta', 'FTA', 'ft_attempted'],
-            'ft_pct': ['ft%', 'FT%', 'ft_pct'],
-            'off_rebounds': ['orb', 'ORB', 'off_rebounds'],
-            'def_rebounds': ['drb', 'DRB', 'def_rebounds'],
-            'steals': ['stl', 'STL', 'steals'],
-            'blocks': ['blk', 'BLK', 'blocks'],
-            'turnovers': ['tov', 'TOV', 'turnovers'],
-            'fouls': ['pf', 'PF', 'fouls'],
-            'plus_minus': ['+/-', 'plus_minus', 'pm']
+        Returns:
+            Cleaned DataFrame
+        """
+        self.logger.info("Cleaning game logs data")
+        
+        df = df.copy()
+        
+        # Standard column mapping
+        column_map = {
+            'Player': 'player',
+            'Team': 'team', 
+            'Date': 'date',
+            'Opponent': 'opponent',
+            'PTS': 'points',
+            'TRB': 'total_rebounds',
+            'AST': 'assists',
+            'MP': 'minutes',
+            'Home/Away': 'home_away'
         }
         
         # Apply column mapping
-        for standard_col, possible_cols in column_mapping.items():
-            for col in possible_cols:
-                if col in df.columns and standard_col not in df.columns:
-                    df = df.rename(columns={col: standard_col})
-                    break
+        for old_col, new_col in column_map.items():
+            if old_col in df.columns and new_col not in df.columns:
+                df = df.rename(columns={old_col: new_col})
         
-        # Required columns for basic functionality
-        required_columns = ['player', 'team', 'date', 'minutes', 'points']
+        # Ensure required columns exist
+        required_columns = ['player', 'team', 'date']
+        missing_required = [col for col in required_columns if col not in df.columns]
         
-        # Check and create missing columns
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        
-        if missing_columns:
-            for col in missing_columns:
-                if col == 'date':
-                    df[col] = datetime.now().date()
-                    self.logger.warning("Missing date column, using current date")
-                elif col in ['minutes', 'points']:
-                    df[col] = 0.0
-                    self.logger.warning(f"Missing {col} column, using 0")
+        if missing_required:
+            # Try to create from available data
+            if 'player' not in df.columns:
+                # Look for any name-like column
+                name_columns = [col for col in df.columns if any(word in col.lower() for word in ['name', 'player'])]
+                if name_columns:
+                    df['player'] = df[name_columns[0]]
                 else:
-                    raise WNBADataError(f"Cannot create required column: {col}")
-        
-        # Add missing optional columns with defaults
-        optional_columns = {
-            'opponent': 'UNK',
-            'home_away': 'H',
-            'total_rebounds': 0.0,
-            'assists': 0.0,
-            'fg_made': 0.0,
-            'fg_attempted': 0.0,
-            'fg_pct': 0.0
-        }
-        
-        for col, default_value in optional_columns.items():
-            if col not in df.columns:
-                df[col] = default_value
-        
-        # Clean and standardize data
-        try:
-            df['player'] = df['player'].apply(clean_player_name)
-            df['team'] = df['team'].apply(standardize_team_name)
+                    df['player'] = 'Unknown Player'
             
-            # Convert date column
-            if not pd.api.types.is_datetime64_any_dtype(df['date']):
+            if 'team' not in df.columns:
+                df['team'] = 'UNK'
+            
+            if 'date' not in df.columns:
+                df['date'] = datetime.now().date()
+        
+        # Clean data types
+        try:
+            if 'date' in df.columns:
                 df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.date
             
             # Convert numeric columns
-            numeric_columns = ['minutes', 'points', 'total_rebounds', 'assists']
+            numeric_columns = ['points', 'total_rebounds', 'assists', 'minutes']
             for col in numeric_columns:
                 if col in df.columns:
-                    df[col] = df[col].apply(lambda x: safe_float_conversion(x, 0.0))
-            
-        except Exception as e:
-            self.logger.error(f"Error cleaning data: {e}")
-            # Continue with raw data if cleaning fails
-        
-        # Add game number if missing
-        if 'game_num' not in df.columns:
-            df['game_num'] = df.groupby('player').cumcount() + 1
-        
-        # Add result if missing
-        if 'result' not in df.columns:
-            df['result'] = 'W'  # Default to wins
-        
-        self.logger.info(f"Data converted successfully: {len(df)} records for {df['player'].nunique()} players")
-        return df
-
-    def train_prediction_models(
-        self, 
-        game_logs_df: Optional[pd.DataFrame] = None,
-        save_models: bool = True
-    ) -> Dict[str, Dict[str, any]]:
-        """Train prediction models with improved feature engineering validation."""
-        self.logger.info("Training prediction models...")
-        
-        if not self.prediction_model:
-            raise WNBAModelError("Prediction model not initialized")
-        
-        try:
-            # Load data if not provided
-            if game_logs_df is None:
-                game_logs_df = self.load_game_logs()
-            
-            # Validate minimum data requirements
-            if len(game_logs_df) < 50:
-                raise WNBAModelError(f"Insufficient data for training: {len(game_logs_df)} records (need at least 50)")
-            
-            if game_logs_df['player'].nunique() < 5:
-                raise WNBAModelError(f"Insufficient players for training: {game_logs_df['player'].nunique()} players (need at least 5)")
-            
-            # Train models with improved feature engineering
-            metrics = self.prediction_model.train_all_models(game_logs_df)
-            
-            # Save models if requested
-            if save_models:
-                try:
-                    model_path = self.prediction_model.save_models()
-                    self.logger.info(f"Models saved to: {model_path}")
-                except Exception as e:
-                    self.logger.warning(f"Failed to save models: {e}")
-            
-            # Log performance summary with data leakage warnings
-            self.logger.info("📊 Training Results:")
-            for stat, stat_metrics in metrics.items():
-                if stat_metrics:
-                    avg_r2 = np.mean([m.r2_score for m in stat_metrics.values()])
-                    avg_mae = np.mean([m.mae for m in stat_metrics.values()])
-                    
-                    self.logger.info(f"  {stat}: R²={avg_r2:.3f}, MAE={avg_mae:.3f}")
-                    
-                    # CRITICAL: Warn if scores are too good (indicating data leakage)
-                    if avg_r2 > 0.95:
-                        self.logger.warning(f"  ⚠️  R² = {avg_r2:.3f} is suspiciously high - possible data leakage!")
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
                 else:
-                    self.logger.warning(f"  {stat}: No models trained successfully")
+                    df[col] = 0.0
             
-            return metrics
+            # Clean text columns
+            if 'player' in df.columns:
+                df['player'] = df['player'].astype(str).str.strip()
+            
+            if 'team' in df.columns:
+                df['team'] = df['team'].astype(str).str.upper()
             
         except Exception as e:
-            raise WNBAModelError(f"Model training failed: {e}")
-
+            self.logger.warning(f"Data cleaning had issues: {e}")
+        
+        # Remove completely empty rows
+        df = df.dropna(how='all')
+        
+        self.logger.info(f"Data cleaning complete: {len(df)} records")
+        return df
+    
     def get_todays_schedule(self) -> Tuple[List[GameSchedule], bool]:
         """
-        Get today's game schedule with validation and real data indication.
+        Get today's game schedule.
         
         Returns:
             Tuple of (games_list, is_real_data)
         """
-        try:
-            if self.schedule_fetcher:
-                today = date.today()
-                games_data = self.schedule_fetcher.get_games_for_date(today)
-                
-                # Check if any games are sample data
-                has_sample_data = any(not game.get('is_real_data', True) for game in games_data)
-                is_real_data = not has_sample_data
-                
-                if has_sample_data:
-                    self.logger.warning("🔶 Some or all games are sample data - not real schedule!")
-                
-                # Convert to GameSchedule objects
-                schedule = []
-                for game_data in games_data:
-                    try:
-                        game_schedule = GameSchedule(
-                            game_id=f"{game_data['date']}_{game_data['away_team']}_{game_data['home_team']}",
-                            date=datetime.strptime(game_data['date'], '%Y-%m-%d').date(),
-                            home_team=game_data['home_team'],
-                            away_team=game_data['away_team'],
-                            game_time=game_data.get('game_time', 'TBD'),
-                            status=game_data.get('status', 'scheduled')
-                        )
-                        schedule.append(game_schedule)
-                    except Exception as e:
-                        self.logger.warning(f"Error converting game data: {e}")
-                        continue
-                
-                return schedule, is_real_data
-            else:
-                # Fallback to sample schedule
-                schedule = self._create_sample_schedule(date.today())
-                return schedule, False
-                
-        except Exception as e:
-            self.logger.error(f"Could not get today's schedule: {e}")
-            schedule = self._create_sample_schedule(date.today())
-            return schedule, False
-
-    def predict_daily_games(
-        self, 
-        target_date: Optional[date] = None,
-        schedule: Optional[List[GameSchedule]] = None
-    ) -> Tuple[List[PlayerPrediction], bool]:
-        """
-        Generate predictions for games with improved schedule validation.
+        today = date.today()
+        self.logger.info(f"Getting schedule for {today}")
         
-        Returns:
-            Tuple of (predictions_list, is_real_data)
-        """
-        if target_date is None:
-            target_date = date.today()
-        
-        self.logger.info(f"Generating predictions for {target_date}")
+        if not self.schedule_fetcher:
+            self.logger.warning("Schedule fetcher not available, using sample data")
+            return self._create_sample_schedule(today), False
         
         try:
-            is_real_data = True
+            games_data = self.schedule_fetcher.get_games_for_date(today)
             
-            # Get schedule if not provided
-            if schedule is None:
-                if target_date == date.today():
-                    schedule, is_real_data = self.get_todays_schedule()
-                else:
-                    # For other dates, also use schedule fetcher
-                    if self.schedule_fetcher:
-                        games_data = self.schedule_fetcher.get_games_for_date(target_date)
-                        
-                        # Check if data is real
-                        has_sample_data = any(not game.get('is_real_data', True) for game in games_data)
-                        is_real_data = not has_sample_data
-                        
-                        schedule = []
-                        for game_data in games_data:
-                            try:
-                                game_schedule = GameSchedule(
-                                    game_id=f"{game_data['date']}_{game_data['away_team']}_{game_data['home_team']}",
-                                    date=target_date,
-                                    home_team=game_data['home_team'],
-                                    away_team=game_data['away_team'],
-                                    game_time=game_data.get('game_time', 'TBD'),
-                                    status=game_data.get('status', 'scheduled')
-                                )
-                                schedule.append(game_schedule)
-                            except Exception as e:
-                                self.logger.warning(f"Error converting game data: {e}")
-                                continue
-                    else:
-                        schedule = self._create_sample_schedule(target_date)
-                        is_real_data = False
+            # Check if data is real
+            is_real_data = all(game.get('is_real_data', True) for game in games_data)
             
-            if not schedule:
-                self.logger.warning(f"No games scheduled for {target_date}")
-                return [], is_real_data
-            
-            # Warn user if using sample data
             if not is_real_data:
-                self.logger.warning("🔶 USING SAMPLE SCHEDULE DATA - PREDICTIONS ARE FOR FAKE GAMES!")
-                self.logger.warning("🔶 Real schedule data sources failed - these predictions are for development only")
+                self.logger.warning("⚠️ Schedule data is sample/fake data")
             
-            # Check if models are trained
-            if not self.prediction_model or not self.prediction_model.is_trained:
-                self.logger.info("Models not trained, attempting to load existing models...")
+            # Convert to GameSchedule objects
+            schedule = []
+            for game_data in games_data:
                 try:
-                    self._load_latest_models()
+                    game_schedule = GameSchedule(
+                        game_id=f"{game_data['date']}_{game_data['away_team']}_{game_data['home_team']}",
+                        date=datetime.strptime(game_data['date'], '%Y-%m-%d').date(),
+                        home_team=game_data['home_team'],
+                        away_team=game_data['away_team'],
+                        game_time=game_data.get('game_time', 'TBD'),
+                        status=game_data.get('status', 'scheduled')
+                    )
+                    schedule.append(game_schedule)
                 except Exception as e:
-                    self.logger.error(f"Could not load models: {e}")
-                    # Generate sample predictions instead of failing
-                    return self._generate_sample_predictions(schedule, target_date), is_real_data
+                    self.logger.warning(f"Error creating game schedule: {e}")
+                    continue
             
-            # Generate predictions using trained models
-            self.logger.info("Generating predictions using trained models")
-            all_predictions = self._generate_model_predictions(schedule, target_date)
-            
-            self.logger.info(f"Generated {len(all_predictions)} player predictions")
-            return all_predictions, is_real_data
+            return schedule, is_real_data
             
         except Exception as e:
-            self.logger.error(f"Prediction generation failed: {e}")
-            # Fallback to sample predictions
-            return self._generate_sample_predictions(schedule or [], target_date), False
-
+            self.logger.error(f"Failed to get today's schedule: {e}")
+            return self._create_sample_schedule(today), False
+    
     def _create_sample_schedule(self, target_date: date) -> List[GameSchedule]:
-        """Create sample game schedule for development with clear indication."""
-        self.logger.warning("🔶 Creating sample schedule - not real games!")
+        """Create sample game schedule for testing."""
+        self.logger.warning("Creating sample schedule data")
         
         teams = ['LV', 'NY', 'CHI', 'CONN', 'IND', 'PHX', 'SEA', 'ATL', 'DAL', 'MIN', 'WAS']
         
-        # Create 2-3 sample games (realistic for WNBA)
         games = []
         for i in range(min(3, len(teams) // 2)):
             home_team = teams[i * 2]
             away_team = teams[i * 2 + 1]
             
             game = GameSchedule(
-                game_id=f"{target_date}_{away_team}_{home_team}",
+                game_id=f"sample_{target_date}_{away_team}_{home_team}",
                 date=target_date,
                 home_team=home_team,
                 away_team=away_team,
@@ -542,23 +428,236 @@ class WNBADailyPredictor:
         
         return games
 
-    def _generate_model_predictions(self, schedule: List[GameSchedule], target_date: date) -> List[PlayerPrediction]:
-        """Generate predictions for scheduled games using trained models."""
-        predictions: List[PlayerPrediction] = []
+
+class ModelManager:
+    """
+    Manages ML model training, persistence, and loading.
+    
+    This class handles:
+    - Model training orchestration
+    - Model persistence and versioning
+    - Performance monitoring
+    - Model loading and validation
+    """
+    
+    def __init__(self, config: Optional[PredictionConfig] = None, model_dir: str = "wnba_models"):
+        """
+        Initialize model manager.
+        
+        Args:
+            config: Prediction configuration
+            model_dir: Directory for storing models
+        """
+        self.config = config or PredictionConfig()
+        self.model_dir = Path(model_dir)
+        self.model_dir.mkdir(exist_ok=True)
+        
+        self.logger = logging.getLogger(f"{__name__}.ModelManager")
+        
+        self.prediction_model = None
+        if PREDICTION_MODELS_AVAILABLE:
+            try:
+                self.prediction_model = WNBAPredictionModel(config=self.config, model_save_dir=str(self.model_dir))
+                self.logger.info("✅ Prediction model initialized")
+            except Exception as e:
+                self.logger.error(f"❌ Prediction model failed: {e}")
+    
+    def train_models(self, game_logs_df: pd.DataFrame, save_models: bool = True) -> Dict[str, Any]:
+        """
+        Train prediction models.
+        
+        Args:
+            game_logs_df: Training data
+            save_models: Whether to save trained models
+            
+        Returns:
+            Training metrics and results
+        """
+        if not self.prediction_model:
+            raise WNBAModelError("Prediction model not available")
+        
+        self.logger.info("Starting model training")
+        
+        # Validate data requirements
+        self._validate_training_data(game_logs_df)
         
         try:
-            # Load historical game logs for feature creation
-            game_logs_df = self.load_game_logs()
-            if game_logs_df.empty:
-                self.logger.warning("No historical game logs available – falling back to sample predictions")
-                return self._generate_sample_predictions(schedule, target_date)
+            # Train models
+            metrics = self.prediction_model.train_all_models(game_logs_df)
             
-            # Create features with improved feature engineering
-            try:
-                features_df = self.prediction_model.feature_engineer.create_all_features(game_logs_df)
-            except Exception as fe_err:
-                self.logger.error(f"Feature engineering failed: {fe_err}")
-                return self._generate_sample_predictions(schedule, target_date)
+            # Save models if requested
+            if save_models:
+                model_path = self.prediction_model.save_models()
+                self.logger.info(f"✅ Models saved to: {model_path}")
+            
+            # Analyze training results
+            training_summary = self._analyze_training_results(metrics)
+            
+            return {
+                'metrics': metrics,
+                'summary': training_summary,
+                'model_path': model_path if save_models else None
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Model training failed: {e}")
+            raise WNBAModelError(f"Training failed: {e}")
+    
+    def _validate_training_data(self, df: pd.DataFrame) -> None:
+        """Validate training data meets requirements."""
+        if len(df) < 50:
+            raise WNBAModelError(f"Insufficient data: {len(df)} records (need at least 50)")
+        
+        required_columns = ['player', 'points', 'total_rebounds', 'assists']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise WNBAModelError(f"Missing required columns: {missing_columns}")
+        
+        if df['player'].nunique() < 5:
+            raise WNBAModelError(f"Insufficient players: {df['player'].nunique()} (need at least 5)")
+    
+    def _analyze_training_results(self, metrics: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """Analyze training results and provide insights."""
+        summary = {
+            'overall_performance': 'unknown',
+            'best_models': {},
+            'warnings': [],
+            'recommendations': []
+        }
+        
+        try:
+            avg_scores = {}
+            
+            for stat, stat_metrics in metrics.items():
+                if not stat_metrics:
+                    summary['warnings'].append(f"No models trained for {stat}")
+                    continue
+                
+                # Find best model for this statistic
+                best_model = max(stat_metrics.items(), key=lambda x: x[1].r2_score)
+                summary['best_models'][stat] = {
+                    'model': best_model[0],
+                    'r2_score': best_model[1].r2_score,
+                    'mae': best_model[1].mae
+                }
+                
+                # Calculate average R² for this stat
+                avg_r2 = np.mean([m.r2_score for m in stat_metrics.values()])
+                avg_scores[stat] = avg_r2
+                
+                # Check for suspicious scores (data leakage)
+                if avg_r2 > 0.95:
+                    summary['warnings'].append(f"Suspiciously high R² for {stat}: {avg_r2:.3f} - possible data leakage")
+            
+            # Overall performance assessment
+            if avg_scores:
+                overall_r2 = np.mean(list(avg_scores.values()))
+                if overall_r2 > 0.8:
+                    summary['overall_performance'] = 'excellent'
+                elif overall_r2 > 0.6:
+                    summary['overall_performance'] = 'good'
+                elif overall_r2 > 0.4:
+                    summary['overall_performance'] = 'fair'
+                else:
+                    summary['overall_performance'] = 'poor'
+                
+                # Generate recommendations
+                if overall_r2 < 0.5:
+                    summary['recommendations'].append("Consider feature engineering or more data")
+                if len(summary['warnings']) > 0:
+                    summary['recommendations'].append("Review feature engineering for data leakage")
+                if overall_r2 > 0.7:
+                    summary['recommendations'].append("Models ready for production use")
+            
+        except Exception as e:
+            self.logger.warning(f"Error analyzing training results: {e}")
+        
+        return summary
+    
+    def load_latest_models(self) -> None:
+        """Load the most recent trained models."""
+        if not self.prediction_model:
+            raise WNBAModelError("Prediction model not available")
+        
+        try:
+            model_dirs = list(self.model_dir.glob("models_*"))
+            
+            if not model_dirs:
+                raise WNBAModelError("No trained models found")
+            
+            # Get most recent model
+            latest_model_dir = max(model_dirs, key=lambda x: x.stat().st_mtime)
+            
+            self.prediction_model.load_models(str(latest_model_dir))
+            self.logger.info(f"✅ Loaded models from: {latest_model_dir}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load models: {e}")
+            raise WNBAModelError(f"Model loading failed: {e}")
+    
+    def is_trained(self) -> bool:
+        """Check if models are trained and ready."""
+        return self.prediction_model and self.prediction_model.is_trained
+
+
+class PredictionManager:
+    """
+    Manages prediction generation and export.
+    
+    This class handles:
+    - Daily prediction generation
+    - Player prediction logic
+    - Result formatting and export
+    - Prediction validation
+    """
+    
+    def __init__(self, output_dir: str = "wnba_predictions"):
+        """
+        Initialize prediction manager.
+        
+        Args:
+            output_dir: Directory for prediction outputs
+        """
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+        
+        self.logger = logging.getLogger(f"{__name__}.PredictionManager")
+    
+    def generate_game_predictions(
+        self, 
+        schedule: List[GameSchedule], 
+        model_manager: ModelManager,
+        data_manager: DataManager
+    ) -> List[PlayerPrediction]:
+        """
+        Generate predictions for scheduled games.
+        
+        Args:
+            schedule: List of scheduled games
+            model_manager: Trained model manager
+            data_manager: Data manager for historical data
+            
+        Returns:
+            List of player predictions
+        """
+        if not schedule:
+            self.logger.warning("No games in schedule")
+            return []
+        
+        if not model_manager.is_trained():
+            self.logger.warning("Models not trained, generating sample predictions")
+            return self._generate_sample_predictions(schedule)
+        
+        self.logger.info(f"Generating predictions for {len(schedule)} games")
+        
+        predictions = []
+        
+        try:
+            # Load historical data for feature creation
+            game_logs_df = data_manager.load_game_logs()
+            
+            # Create features
+            features_df = model_manager.prediction_model.feature_engineer.create_all_features(game_logs_df)
             
             # Get latest features for each player
             latest_features = (
@@ -569,58 +668,75 @@ class WNBADailyPredictor:
             
             # Generate predictions for each game
             for game in schedule:
-                for team, is_home in [(game.home_team, True), (game.away_team, False)]:
-                    opponent = game.away_team if is_home else game.home_team
-                    
-                    # Get players for this team
-                    team_players_df = latest_features[latest_features['team'] == team]
-                    
-                    if team_players_df.empty:
-                        self.logger.warning(f"No player data found for team {team}")
-                        continue
-                    
-                    # Select top players by minutes
-                    team_players_df = team_players_df.sort_values('minutes', ascending=False).head(8)
-                    
-                    for _, player_row in team_players_df.iterrows():
-                        try:
-                            # Generate prediction
-                            player_pred_raw = self.prediction_model.predict_player_stats(player_row)
-                            
-                            # Create final prediction object
-                            pred = PlayerPrediction(
-                                game_id=game.game_id,
-                                player=str(player_row['player']),
-                                team=team,
-                                opponent=opponent,
-                                home_away=HomeAway.HOME if is_home else HomeAway.AWAY,
-                                predicted_points=round(player_pred_raw.predicted_points, 1),
-                                predicted_rebounds=round(player_pred_raw.predicted_rebounds, 1),
-                                predicted_assists=round(player_pred_raw.predicted_assists, 1),
-                                points_uncertainty=round(player_pred_raw.points_uncertainty, 1),
-                                rebounds_uncertainty=round(player_pred_raw.rebounds_uncertainty, 1),
-                                assists_uncertainty=round(player_pred_raw.assists_uncertainty, 1),
-                                confidence_score=round(player_pred_raw.confidence_score, 2),
-                                model_version=self.prediction_model.model_version
-                            )
-                            predictions.append(pred)
-                            
-                        except Exception as pred_err:
-                            self.logger.warning(f"Prediction failed for {player_row.get('player', 'Unknown')}: {pred_err}")
-                            continue
-        
+                game_predictions = self._predict_game_players(game, latest_features, model_manager)
+                predictions.extend(game_predictions)
+            
+            self.logger.info(f"✅ Generated {len(predictions)} player predictions")
+            
         except Exception as e:
-            self.logger.error(f"Model-based prediction generation failed: {e}")
-            return self._generate_sample_predictions(schedule, target_date)
+            self.logger.error(f"Prediction generation failed: {e}")
+            return self._generate_sample_predictions(schedule)
         
         return predictions
-
-    def _generate_sample_predictions(self, schedule: List[GameSchedule], target_date: date) -> List[PlayerPrediction]:
-        """Generate sample predictions for development and fallback."""
-        self.logger.warning("🔶 Generating sample predictions - not real player predictions!")
+    
+    def _predict_game_players(
+        self, 
+        game: GameSchedule, 
+        features_df: pd.DataFrame, 
+        model_manager: ModelManager
+    ) -> List[PlayerPrediction]:
+        """Generate predictions for players in a specific game."""
+        game_predictions = []
+        
+        for team, is_home in [(game.home_team, True), (game.away_team, False)]:
+            opponent = game.away_team if is_home else game.home_team
+            
+            # Get players for this team
+            team_players = features_df[features_df['team'] == team]
+            
+            if team_players.empty:
+                self.logger.debug(f"No players found for team {team}")
+                continue
+            
+            # Select top players by minutes played
+            team_players = team_players.sort_values('minutes', ascending=False).head(8)
+            
+            for _, player_row in team_players.iterrows():
+                try:
+                    # Generate prediction using model
+                    pred = model_manager.prediction_model.predict_player_stats(player_row)
+                    
+                    # Create final prediction object
+                    player_prediction = PlayerPrediction(
+                        game_id=game.game_id,
+                        player=str(player_row['player']),
+                        team=team,
+                        opponent=opponent,
+                        home_away=HomeAway.HOME if is_home else HomeAway.AWAY,
+                        predicted_points=round(pred.predicted_points, 1),
+                        predicted_rebounds=round(pred.predicted_rebounds, 1),
+                        predicted_assists=round(pred.predicted_assists, 1),
+                        points_uncertainty=round(pred.points_uncertainty, 1),
+                        rebounds_uncertainty=round(pred.rebounds_uncertainty, 1),
+                        assists_uncertainty=round(pred.assists_uncertainty, 1),
+                        confidence_score=round(pred.confidence_score, 2),
+                        model_version=model_manager.prediction_model.model_version
+                    )
+                    
+                    game_predictions.append(player_prediction)
+                    
+                except Exception as e:
+                    self.logger.warning(f"Prediction failed for {player_row.get('player', 'Unknown')}: {e}")
+                    continue
+        
+        return game_predictions
+    
+    def _generate_sample_predictions(self, schedule: List[GameSchedule]) -> List[PlayerPrediction]:
+        """Generate sample predictions for testing."""
+        self.logger.warning("Generating sample predictions")
         
         # Sample players for each team
-        team_players = {
+        team_rosters = {
             'LV': ['A\'ja Wilson', 'Kelsey Plum', 'Jackie Young'],
             'NY': ['Sabrina Ionescu', 'Breanna Stewart', 'Jonquel Jones'],
             'CHI': ['Chennedy Carter', 'Angel Reese', 'Dana Evans'],
@@ -637,31 +753,24 @@ class WNBADailyPredictor:
         predictions = []
         
         for game in schedule:
-            # Generate predictions for players from both teams
             for team, is_home in [(game.home_team, True), (game.away_team, False)]:
                 opponent = game.away_team if is_home else game.home_team
-                
-                players = team_players.get(team, [f"Player 1", f"Player 2", f"Player 3"])
+                players = team_rosters.get(team, [f"{team} Player 1", f"{team} Player 2", f"{team} Player 3"])
                 
                 for player in players:
-                    # Generate realistic predictions based on player type
+                    # Generate realistic stats based on player type
                     if any(star in player for star in ['Wilson', 'Stewart', 'Clark', 'Ionescu', 'Taurasi']):
                         # Star players
-                        points = random.normalvariate(22, 3)
-                        rebounds = random.normalvariate(8, 2)
-                        assists = random.normalvariate(6, 2)
+                        points = max(0, random.normalvariate(22, 3))
+                        rebounds = max(0, random.normalvariate(8, 2))
+                        assists = max(0, random.normalvariate(6, 2))
                         confidence = random.uniform(0.75, 0.95)
                     else:
                         # Role players
-                        points = random.normalvariate(12, 3)
-                        rebounds = random.normalvariate(5, 2)
-                        assists = random.normalvariate(3, 1.5)
+                        points = max(0, random.normalvariate(12, 3))
+                        rebounds = max(0, random.normalvariate(5, 2))
+                        assists = max(0, random.normalvariate(3, 1.5))
                         confidence = random.uniform(0.6, 0.8)
-                    
-                    # Ensure non-negative values
-                    points = max(0, points)
-                    rebounds = max(0, rebounds)
-                    assists = max(0, assists)
                     
                     prediction = PlayerPrediction(
                         game_id=game.game_id,
@@ -682,155 +791,229 @@ class WNBADailyPredictor:
                     predictions.append(prediction)
         
         return predictions
-
-    def _load_latest_models(self) -> None:
-        """Load the most recent trained models."""
-        try:
-            model_dirs = list(Path("wnba_models").glob("models_*"))
-            
-            if not model_dirs:
-                raise WNBAModelError("No trained models found. Run training first.")
-            
-            # Get most recent model
-            latest_model_dir = max(model_dirs, key=lambda x: x.stat().st_mtime)
-            
-            if self.prediction_model:
-                self.prediction_model.load_models(str(latest_model_dir))
-                self.logger.info(f"Loaded models from: {latest_model_dir}")
-            else:
-                raise WNBAModelError("Prediction model not initialized")
-                
-        except Exception as e:
-            raise WNBAModelError(f"Failed to load models: {e}")
-
+    
     def export_predictions(
         self, 
-        predictions: List[PlayerPrediction],
-        target_date: Optional[date] = None,
-        is_real_data: bool = True
+        predictions: List[PlayerPrediction], 
+        is_real_data: bool = True,
+        target_date: Optional[date] = None
     ) -> str:
-        """Export predictions to CSV file with data source indication."""
+        """
+        Export predictions to CSV file.
+        
+        Args:
+            predictions: List of predictions to export
+            is_real_data: Whether predictions are based on real schedule data
+            target_date: Date for predictions (defaults to today)
+            
+        Returns:
+            Path to exported file
+        """
         if target_date is None:
             target_date = date.today()
+        
+        self.logger.info(f"Exporting {len(predictions)} predictions")
         
         # Convert to DataFrame
         prediction_dicts = [pred.to_dict() for pred in predictions]
         df = pd.DataFrame(prediction_dicts)
         
-        # Add data source information
-        df['data_source'] = 'Real Schedule' if is_real_data else 'Sample Data'
-        df['is_real_data'] = is_real_data
+        # Add metadata
+        df['export_timestamp'] = datetime.now()
+        df['data_source_type'] = 'Real Schedule' if is_real_data else 'Sample Data'
+        df['is_real_schedule'] = is_real_data
         
-        # Export file with clear indication of data type
+        # Generate filename
         timestamp = datetime.now().strftime("%H%M%S")
         data_type = "real" if is_real_data else "sample"
         filename = f"predictions_{target_date.strftime('%Y%m%d')}_{data_type}_{timestamp}.csv"
-        filepath = os.path.join(self.output_dir, filename)
+        filepath = self.output_dir / filename
         
+        # Save file
         df.to_csv(filepath, index=False)
         
         if is_real_data:
             self.logger.info(f"✅ Exported {len(predictions)} real predictions to: {filepath}")
         else:
-            self.logger.warning(f"🔶 Exported {len(predictions)} sample predictions to: {filepath}")
-            self.logger.warning(f"🔶 File contains predictions for fake games - for development only!")
+            self.logger.warning(f"⚠️ Exported {len(predictions)} sample predictions to: {filepath}")
         
-        return filepath
+        return str(filepath)
 
-    def run_full_pipeline(
-        self, 
-        year: int,
-        train_models: bool = True,
-        predict_today: bool = True
-    ) -> Dict[str, any]:
-        """Run the complete prediction pipeline with improved schedule validation."""
-        results = {}
+
+class WNBADailyPredictor:
+    """
+    Main orchestrator for the WNBA daily prediction system.
+    
+    This class coordinates between data management, model training,
+    and prediction generation to provide a complete prediction pipeline.
+    """
+    
+    def __init__(self, config: Optional[PredictionConfig] = None):
+        """
+        Initialize the daily predictor.
+        
+        Args:
+            config: Prediction configuration
+        """
+        self.config = config or PredictionConfig()
+        
+        # Initialize managers
+        self.data_manager = DataManager()
+        self.model_manager = ModelManager(self.config)
+        self.prediction_manager = PredictionManager()
+        
+        # Setup logging
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("🏀 WNBA Daily Predictor initialized")
+        
+        # Setup project structure if utils available
+        if UTILS_AVAILABLE:
+            try:
+                setup_project_structure()
+                setup_logging(log_level="INFO", log_file="logs/wnba_main.log")
+            except Exception as e:
+                self.logger.warning(f"Utils setup failed: {e}")
+    
+    def run_full_pipeline(self, year: int, train_models: bool = True, predict_today: bool = True) -> Dict[str, Any]:
+        """
+        Run the complete prediction pipeline.
+        
+        Args:
+            year: Year to fetch training data for
+            train_models: Whether to train new models
+            predict_today: Whether to generate today's predictions
+            
+        Returns:
+            Dictionary with pipeline results
+        """
+        self.logger.info(f"🚀 Starting full prediction pipeline for {year}")
+        
+        results = {
+            'pipeline_start_time': datetime.now(),
+            'year': year,
+            'steps_completed': [],
+            'warnings': [],
+            'errors': []
+        }
         
         try:
-            self.logger.info("🏀 Starting WNBA Prediction Pipeline (Improved Version)")
-            self.logger.info("=" * 50)
-            
-            # 1. Check data availability
-            availability = self.check_data_availability(year)
+            # Step 1: Check data availability
+            self.logger.info("📊 Step 1: Checking data availability")
+            availability = self.data_manager.check_data_availability(year)
             results['data_availability'] = availability
+            results['steps_completed'].append('data_availability_check')
             
-            # 2. Fetch season data (for training)
-            try:
-                file_paths = self.fetch_season_data(year)
-                results['data_files'] = file_paths
-                self.logger.info(f"✅ Data files: {list(file_paths.keys())}")
-            except WNBADataError as e:
-                self.logger.error(f"Data fetching failed: {e}")
-                results['data_error'] = str(e)
-            
-            # 3. Train models if requested and data available
-            if train_models and 'data_files' in results:
+            # Step 2: Fetch season data if needed
+            if availability['total_records'] < 100:
+                self.logger.info("📥 Step 2: Fetching season data")
                 try:
-                    metrics = self.train_prediction_models()
-                    results['training_metrics'] = metrics
-                    self.logger.info("✅ Model training completed")
-                    
-                    # Check for data leakage in results
-                    for stat, stat_metrics in metrics.items():
-                        if stat_metrics:
-                            avg_r2 = np.mean([m.r2_score for m in stat_metrics.values()])
-                            if avg_r2 > 0.95:
-                                self.logger.warning(f"⚠️  {stat}: R² = {avg_r2:.3f} - suspiciously high!")
-                                results['data_leakage_warning'] = f"High R² scores detected - possible data leakage"
-                    
-                except WNBAModelError as e:
-                    self.logger.error(f"Model training failed: {e}")
-                    results['training_error'] = str(e)
-            
-            # 4. Generate today's predictions if requested
-            if predict_today:
-                try:
-                    predictions, is_real_data = self.predict_daily_games()
-                    
-                    if predictions:
-                        export_path = self.export_predictions(predictions, is_real_data=is_real_data)
-                        results['predictions_file'] = export_path
-                        results['num_predictions'] = len(predictions)
-                        results['is_real_schedule'] = is_real_data
-                        
-                        if is_real_data:
-                            self.logger.info(f"✅ Generated {len(predictions)} predictions from real schedule")
-                        else:
-                            self.logger.warning(f"🔶 Generated {len(predictions)} predictions from sample schedule")
-                            results['sample_data_warning'] = "Predictions based on sample/fake game schedule"
-                    else:
-                        results['predictions_note'] = "No games today"
-                        self.logger.info("📅 No games scheduled for today")
-                        
-                except WNBAPredictionError as e:
-                    self.logger.error(f"Daily prediction failed: {e}")
-                    results['prediction_error'] = str(e)
-            
-            # Summary
-            errors = [key for key in results.keys() if key.endswith('_error')]
-            warnings = [key for key in results.keys() if key.endswith('_warning')]
-            
-            if not errors and not warnings:
-                self.logger.info("🎉 Pipeline completed successfully!")
-            elif warnings and not errors:
-                self.logger.info(f"⚠️  Pipeline completed with {len(warnings)} warnings")
-                for warning_key in warnings:
-                    self.logger.info(f"   - {warning_key}: {results[warning_key]}")
+                    file_paths = self.data_manager.fetch_season_data(year)
+                    results['data_files'] = file_paths
+                    results['steps_completed'].append('data_fetch')
+                except Exception as e:
+                    error_msg = f"Data fetching failed: {e}"
+                    results['errors'].append(error_msg)
+                    self.logger.error(error_msg)
             else:
-                self.logger.info(f"⚠️ Pipeline completed with {len(errors)} issues")
+                self.logger.info("📊 Step 2: Using existing data")
+                results['steps_completed'].append('data_existing')
             
-            return results
+            # Step 3: Train models if requested
+            if train_models:
+                self.logger.info("🤖 Step 3: Training models")
+                try:
+                    game_logs_df = self.data_manager.load_game_logs()
+                    training_results = self.model_manager.train_models(game_logs_df)
+                    results['training_results'] = training_results
+                    results['steps_completed'].append('model_training')
+                    
+                    # Check for warnings
+                    if training_results['summary'].get('warnings'):
+                        results['warnings'].extend(training_results['summary']['warnings'])
+                        
+                except Exception as e:
+                    error_msg = f"Model training failed: {e}"
+                    results['errors'].append(error_msg)
+                    self.logger.error(error_msg)
+            else:
+                self.logger.info("🤖 Step 3: Loading existing models")
+                try:
+                    self.model_manager.load_latest_models()
+                    results['steps_completed'].append('model_loading')
+                except Exception as e:
+                    warning_msg = f"Model loading failed: {e}"
+                    results['warnings'].append(warning_msg)
+                    self.logger.warning(warning_msg)
+            
+            # Step 4: Generate today's predictions
+            if predict_today:
+                self.logger.info("🔮 Step 4: Generating predictions")
+                try:
+                    schedule, is_real_data = self.data_manager.get_todays_schedule()
+                    
+                    if schedule:
+                        predictions = self.prediction_manager.generate_game_predictions(
+                            schedule, self.model_manager, self.data_manager
+                        )
+                        
+                        if predictions:
+                            export_path = self.prediction_manager.export_predictions(
+                                predictions, is_real_data
+                            )
+                            
+                            results['predictions'] = {
+                                'file_path': export_path,
+                                'count': len(predictions),
+                                'is_real_schedule': is_real_data,
+                                'games': len(schedule)
+                            }
+                            results['steps_completed'].append('prediction_generation')
+                            
+                            if not is_real_data:
+                                results['warnings'].append("Predictions based on sample schedule data")
+                        else:
+                            results['warnings'].append("No predictions generated")
+                    else:
+                        results['warnings'].append("No games scheduled for today")
+                        
+                except Exception as e:
+                    error_msg = f"Prediction generation failed: {e}"
+                    results['errors'].append(error_msg)
+                    self.logger.error(error_msg)
+            
+            # Pipeline completion
+            results['pipeline_end_time'] = datetime.now()
+            results['pipeline_duration'] = (results['pipeline_end_time'] - results['pipeline_start_time']).total_seconds()
+            
+            # Success assessment
+            critical_steps = ['data_availability_check']
+            if train_models:
+                critical_steps.append('model_training')
+            if predict_today:
+                critical_steps.append('prediction_generation')
+            
+            critical_completed = [step for step in critical_steps if step in results['steps_completed']]
+            results['success_rate'] = len(critical_completed) / len(critical_steps)
+            
+            if results['success_rate'] == 1.0:
+                self.logger.info("🎉 Pipeline completed successfully!")
+            elif results['success_rate'] >= 0.7:
+                self.logger.info(f"⚠️ Pipeline completed with warnings ({results['success_rate']:.1%} success)")
+            else:
+                self.logger.error(f"❌ Pipeline failed ({results['success_rate']:.1%} success)")
             
         except Exception as e:
-            self.logger.error(f"Pipeline failed: {e}")
-            results['pipeline_error'] = str(e)
-            return results
+            error_msg = f"Pipeline failed with unexpected error: {e}"
+            results['errors'].append(error_msg)
+            self.logger.error(error_msg)
+        
+        return results
 
 
 def main():
-    """Main function with improved command line interface and error handling."""
+    """Main function with enhanced command-line interface."""
     parser = argparse.ArgumentParser(
-        description="WNBA Daily Game Prediction System - Improved Schedule Handling",
+        description="Enhanced WNBA Daily Game Prediction System",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -842,212 +1025,114 @@ Examples:
         """
     )
     
-    parser.add_argument(
-        '--check-data',
-        type=int,
-        metavar='YEAR',
-        help='Check data availability for year'
-    )
+    # Action arguments
+    parser.add_argument('--check-data', type=int, metavar='YEAR', help='Check data availability for year')
+    parser.add_argument('--fetch-data', type=int, metavar='YEAR', help='Fetch season data for year')
+    parser.add_argument('--train', type=int, metavar='YEAR', help='Train models using data from year')
+    parser.add_argument('--predict', action='store_true', help='Generate predictions for today')
+    parser.add_argument('--full-pipeline', type=int, metavar='YEAR', help='Run complete pipeline for year')
     
-    parser.add_argument(
-        '--fetch-data',
-        type=int,
-        metavar='YEAR',
-        help='Fetch season data for year'
-    )
-    
-    parser.add_argument(
-        '--train',
-        type=int,
-        metavar='YEAR',
-        help='Train models using data from year'
-    )
-    
-    parser.add_argument(
-        '--predict',
-        action='store_true',
-        help='Generate predictions for today or a specific date (use --date YYYY-MM-DD)'
-    )
-    
-    parser.add_argument(
-        '--date',
-        type=str,
-        help='Date for prediction in YYYY-MM-DD format (used with --predict)'
-    )
-    
-    parser.add_argument(
-        '--full-pipeline',
-        type=int,
-        metavar='YEAR',
-        help='Run complete pipeline for year'
-    )
-    
-    parser.add_argument(
-        '--config',
-        type=str,
-        help='Path to configuration file (optional)'
-    )
+    # Options
+    parser.add_argument('--config', type=str, help='Path to configuration file')
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
+    parser.add_argument('--no-train', action='store_true', help='Skip training in full pipeline')
+    parser.add_argument('--no-predict', action='store_true', help='Skip prediction in full pipeline')
     
     args = parser.parse_args()
     
     # Setup logging
-    setup_logging(log_level="INFO")
+    log_level = "DEBUG" if args.verbose else "INFO"
+    if UTILS_AVAILABLE:
+        setup_logging(log_level=log_level)
+    else:
+        logging.basicConfig(level=getattr(logging, log_level))
     
-    # Load configuration if provided
-    config = None
-    if args.config and os.path.exists(args.config):
-        try:
-            # Try to load from TOML if config_loader available
-            try:
-                from config_loader import ConfigLoader
-                config = ConfigLoader.load_config(args.config)
-            except ImportError:
-                # Fallback to default config
-                config = PredictionConfig()
-                logging.warning("Using default configuration (config_loader not available)")
-        except Exception as e:
-            logging.error(f"Failed to load configuration: {e}")
-            config = PredictionConfig()
+    # Load configuration
+    config = PredictionConfig()  # Use default for now
     
-    # Initialize predictor
-    try:
-        # If config is a WNBAConfig, extract the PredictionConfig
-        if config is not None:
-            from config_loader import WNBAConfig as LoaderWNBAConfig, PredictionConfig as LoaderPredictionConfig
-            from data_models import PredictionConfig as ModelsPredictionConfig
-            if isinstance(config, LoaderWNBAConfig):
-                loader_pred = config.prediction
-                # Convert LoaderPredictionConfig to ModelsPredictionConfig
-                models_pred = ModelsPredictionConfig(
-                    target_stats=list(loader_pred.target_stats),
-                    min_games_for_prediction=loader_pred.min_games_for_prediction,
-                    confidence_threshold=loader_pred.confidence_threshold,
-                    max_uncertainty=loader_pred.max_uncertainty,
-                    model_weights=dict(getattr(loader_pred, 'model_weights', {})),
-                    feature_importance_threshold=getattr(loader_pred, 'feature_importance_threshold', 0.01),
-                    validation_split=getattr(loader_pred, 'validation_split', 0.2),
-                    random_state=getattr(loader_pred, 'random_state', 42),
-                    n_cross_validation_folds=getattr(loader_pred, 'n_cross_validation_folds', 5),
-                    max_training_time_minutes=getattr(loader_pred, 'max_training_time_minutes', 60)
-                )
-                predictor = WNBADailyPredictor(config=models_pred)
-            elif isinstance(config, LoaderPredictionConfig):
-                # Convert LoaderPredictionConfig to ModelsPredictionConfig
-                models_pred = ModelsPredictionConfig(
-                    target_stats=list(config.target_stats),
-                    min_games_for_prediction=config.min_games_for_prediction,
-                    confidence_threshold=config.confidence_threshold,
-                    max_uncertainty=config.max_uncertainty,
-                    model_weights=dict(getattr(config, 'model_weights', {})),
-                    feature_importance_threshold=getattr(config, 'feature_importance_threshold', 0.01),
-                    validation_split=getattr(config, 'validation_split', 0.2),
-                    random_state=getattr(config, 'random_state', 42),
-                    n_cross_validation_folds=getattr(config, 'n_cross_validation_folds', 5),
-                    max_training_time_minutes=getattr(config, 'max_training_time_minutes', 60)
-                )
-                predictor = WNBADailyPredictor(config=models_pred)
-            else:
-                predictor = WNBADailyPredictor(config=config)
-        else:
-            predictor = WNBADailyPredictor()
-    except Exception as e:
-        print(f"❌ Failed to initialize predictor: {e}")
-        sys.exit(1)
-    
-    print("🏀 WNBA Daily Game Prediction System (Improved Schedule Handling)")
+    print("🏀 Enhanced WNBA Daily Game Prediction System")
     print("=" * 60)
     
     try:
+        # Initialize predictor
+        predictor = WNBADailyPredictor(config=config)
+        
+        # Execute requested action
         if args.check_data:
-            availability = predictor.check_data_availability(args.check_data)
+            availability = predictor.data_manager.check_data_availability(args.check_data)
             print(f"\n📊 Data Availability for {args.check_data}:")
-            for data_type, available in availability.items():
-                status = "✅ Available" if available else "❌ Not Available"
-                print(f"  {data_type}: {status}")
+            print(f"   Files found: {len(availability['files_found'])}")
+            print(f"   Total records: {availability['total_records']}")
+            print(f"   Data quality: {availability['data_quality']}")
+            if availability['teams_found']:
+                print(f"   Teams: {', '.join(availability['teams_found'][:5])}{'...' if len(availability['teams_found']) > 5 else ''}")
         
         elif args.fetch_data:
-            try:
-                file_paths = predictor.fetch_season_data(args.fetch_data)
-                print(f"\n📁 Data Files for {args.fetch_data}:")
-                for data_type, path in file_paths.items():
-                    print(f"  {data_type}: {path}")
-            except Exception as e:
-                print(f"\n❌ Data fetch failed: {e}")
+            file_paths = predictor.data_manager.fetch_season_data(args.fetch_data)
+            print(f"\n📁 Data Files for {args.fetch_data}:")
+            for data_type, path in file_paths.items():
+                print(f"   {data_type}: {path}")
         
         elif args.train:
-            try:
-                metrics = predictor.train_prediction_models()
-                print(f"\n🤖 Training Complete for {args.train}")
-                print("Performance Summary:")
-                for stat, stat_metrics in metrics.items():
-                    if stat_metrics:
-                        print(f"  {stat}:")
-                        for model, metric in stat_metrics.items():
-                            r2_warning = " ⚠️ SUSPICIOUSLY HIGH" if metric.r2_score > 0.95 else ""
-                            print(f"    {model}: R²={metric.r2_score:.3f}, MAE={metric.mae:.3f}{r2_warning}")
-                    else:
-                        print(f"  {stat}: No models trained successfully")
-            except Exception as e:
-                print(f"\n❌ Training failed: {e}")
+            game_logs_df = predictor.data_manager.load_game_logs()
+            results = predictor.model_manager.train_models(game_logs_df)
+            print(f"\n🤖 Training Results:")
+            print(f"   Performance: {results['summary'].get('overall_performance', 'unknown')}")
+            if results['summary'].get('warnings'):
+                print(f"   Warnings: {len(results['summary']['warnings'])}")
+            if results['summary'].get('best_models'):
+                print(f"   Best models trained for: {list(results['summary']['best_models'].keys())}")
         
         elif args.predict:
-            try:
-                # Parse date argument if provided
-                target_date = None
-                if args.date:
-                    try:
-                        from datetime import datetime
-                        target_date = datetime.strptime(args.date, '%Y-%m-%d').date()
-                    except Exception:
-                        print(f"\n❌ Invalid date format: {args.date}. Use YYYY-MM-DD.")
-                        sys.exit(1)
-                predictions, is_real_data = predictor.predict_daily_games(target_date=target_date)
-                
+            schedule, is_real_data = predictor.data_manager.get_todays_schedule()
+            if not schedule:
+                print(f"\n📅 No games scheduled for today")
+            else:
+                predictions = predictor.prediction_manager.generate_game_predictions(
+                    schedule, predictor.model_manager, predictor.data_manager
+                )
                 if predictions:
-                    export_path = predictor.export_predictions(predictions, is_real_data=is_real_data)
-                    
-                    data_type_indicator = "✅ REAL" if is_real_data else "🔶 SAMPLE"
-                    print(f"\n🔮 Generated {len(predictions)} predictions ({data_type_indicator} schedule data)")
+                    export_path = predictor.prediction_manager.export_predictions(predictions, is_real_data)
+                    data_type = "real" if is_real_data else "sample"
+                    print(f"\n🔮 Generated {len(predictions)} predictions ({data_type} schedule)")
                     print(f"   Exported to: {export_path}")
-                    
-                    if not is_real_data:
-                        print(f"\n🔶 WARNING: Using sample schedule data!")
-                        print(f"🔶 Real schedule sources failed - predictions are for fake games")
-                        print(f"🔶 This is intended for development/testing only")
-                    
-                    # Show sample predictions
-                    print(f"\n📋 Sample predictions:")
-                    for i, pred in enumerate(predictions[:3]):
-                        print(f"  {i+1}. {pred.player} ({pred.team}): {pred.predicted_points:.1f} PTS, {pred.predicted_rebounds:.1f} REB, {pred.predicted_assists:.1f} AST")
+                    print(f"   Games: {len(schedule)}")
                 else:
-                    print(f"\n📅 No games scheduled for today")
-            except Exception as e:
-                print(f"\n❌ Prediction failed: {e}")
+                    print(f"\n❌ No predictions generated")
         
         elif args.full_pipeline:
-            results = predictor.run_full_pipeline(args.full_pipeline)
+            results = predictor.run_full_pipeline(
+                year=args.full_pipeline,
+                train_models=not args.no_train,
+                predict_today=not args.no_predict
+            )
+            
             print(f"\n🎉 Pipeline Results:")
+            print(f"   Success rate: {results['success_rate']:.1%}")
+            print(f"   Steps completed: {len(results['steps_completed'])}")
             
-            # Highlight important warnings
-            if results.get('sample_data_warning'):
-                print(f"\n🔶 IMPORTANT: {results['sample_data_warning']}")
-            if results.get('data_leakage_warning'):
-                print(f"\n⚠️ WARNING: {results['data_leakage_warning']}")
+            if results.get('warnings'):
+                print(f"   Warnings: {len(results['warnings'])}")
+                for warning in results['warnings'][:3]:
+                    print(f"     • {warning}")
             
-            print(json.dumps(results, indent=2, default=str))
+            if results.get('errors'):
+                print(f"   Errors: {len(results['errors'])}")
+                for error in results['errors'][:3]:
+                    print(f"     • {error}")
+            
+            if results.get('predictions'):
+                pred_info = results['predictions']
+                print(f"   Predictions: {pred_info['count']} players, {pred_info['games']} games")
         
         else:
             parser.print_help()
     
-    except (WNBADataError, WNBAModelError, WNBAPredictionError) as e:
-        print(f"\n❌ Error: {e}")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        print(f"\n👋 Interrupted by user")
-        sys.exit(0)
     except Exception as e:
-        print(f"\n💥 Unexpected error: {e}")
-        print("💡 Try running with --verbose for more details")
+        print(f"\n💥 Error: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
 
 
