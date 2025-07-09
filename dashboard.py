@@ -509,8 +509,7 @@ def render_todays_games(dashboard: WNBADashboard, confidence_threshold: float, s
     games = predictions_df.groupby('game_id')
     
     for game_id, game_predictions in games:
-        st.subheader(f"🎮 Game: {game_id}")
-        
+        st.subheader(f"�� Game: {game_id}")
         # Try to identify teams
         home_players = game_predictions[game_predictions['home_away'] == 'H']
         away_players = game_predictions[game_predictions['home_away'] == 'A']
@@ -523,13 +522,21 @@ def render_todays_games(dashboard: WNBADashboard, confidence_threshold: float, s
         with col1:
             if isinstance(home_players, pd.DataFrame) and not home_players.empty:
                 home_team = home_players['team'].iloc[0]
-                st.markdown(f"**🏠 {home_team} (Home)**")
-                render_team_predictions(home_players, show_uncertainties)
+                from team_mapping import TeamNameMapper
+                if not TeamNameMapper.is_valid_abbreviation(home_team):
+                    st.error(f"Invalid home team: {home_team}. Only real teams from team_mapping.py are allowed.")
+                else:
+                    st.markdown(f"**🏠 {home_team} (Home)**")
+                    render_team_predictions(home_players, show_uncertainties)
         with col2:
             if isinstance(away_players, pd.DataFrame) and not away_players.empty:
                 away_team = away_players['team'].iloc[0]
-                st.markdown(f"**✈️ {away_team} (Away)**")
-                render_team_predictions(away_players, show_uncertainties)
+                from team_mapping import TeamNameMapper
+                if not TeamNameMapper.is_valid_abbreviation(away_team):
+                    st.error(f"Invalid away team: {away_team}. Only real teams from team_mapping.py are allowed.")
+                else:
+                    st.markdown(f"**✈️ {away_team} (Away)**")
+                    render_team_predictions(away_players, show_uncertainties)
         st.markdown("---")
 
 

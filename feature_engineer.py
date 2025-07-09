@@ -21,6 +21,7 @@ from data_models import (
     PlayerGameLog, TeamGameLog, HomeAway, GameResult,
     WNBADataError, PredictionConfig
 )
+from team_mapping import TeamNameMapper
 
 
 class WNBAFeatureEngineer:
@@ -71,6 +72,7 @@ class WNBAFeatureEngineer:
         """
         Validate and clean input game log data.
         Map raw columns from data_fetcher.py to internal names.
+        Enforce strict team validation: only real teams from team_mapping.py are allowed.
         """
         # Map Basketball Reference/stat CSV columns to internal names
         column_map = {
@@ -101,6 +103,11 @@ class WNBAFeatureEngineer:
             '+/-': 'plus_minus',
         }
         df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
+        # Strict team validation
+        if 'team' in df.columns:
+            df['team'] = df['team'].apply(lambda t: TeamNameMapper.to_abbreviation(t) if TeamNameMapper.to_abbreviation(t) else (_ for _ in ()).throw(ValueError(f"Unknown team: {t}. Only real teams from team_mapping.py are allowed.")))
+        if 'opponent' in df.columns:
+            df['opponent'] = df['opponent'].apply(lambda t: TeamNameMapper.to_abbreviation(t) if TeamNameMapper.to_abbreviation(t) else (_ for _ in ()).throw(ValueError(f"Unknown opponent: {t}. Only real teams from team_mapping.py are allowed.")))
         
         # Ensure total_rebounds is present if off_rebounds and def_rebounds are available
         if 'total_rebounds' not in df.columns and 'off_rebounds' in df.columns and 'def_rebounds' in df.columns:

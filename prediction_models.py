@@ -35,6 +35,7 @@ from data_models import (
     WNBAModelError, WNBAPredictionError
 )
 from feature_engineer import WNBAFeatureEngineer
+from team_mapping import TeamNameMapper
 
 warnings.filterwarnings('ignore')
 
@@ -612,11 +613,21 @@ class WNBAPredictionModel:
             
             # Create prediction object (would need game context for full object)
             # This is a simplified version - full implementation would need game details
+            if not (isinstance(player_features, dict) or hasattr(player_features, 'get')):
+                raise WNBAPredictionError("player_features must be a dict or have a .get method")
+            team = player_features.get('team')
+            opponent = player_features.get('opponent')
+            if not team or not opponent:
+                raise WNBAPredictionError("Missing team or opponent in player_features. Only real teams from team_mapping.py are allowed.")
+            team = TeamNameMapper.to_abbreviation(team)
+            opponent = TeamNameMapper.to_abbreviation(opponent)
+            if not team or not opponent:
+                raise WNBAPredictionError(f"Unknown team or opponent: {team}, {opponent}. Only real teams from team_mapping.py are allowed.")
             return PlayerPrediction(
                 game_id="unknown",
                 player="unknown",
-                team="unknown", 
-                opponent="unknown",
+                team=team,
+                opponent=opponent,
                 home_away="H",  # Would come from game context
                 predicted_points=predictions.get('points', 0.0),
                 predicted_rebounds=predictions.get('total_rebounds', 0.0),

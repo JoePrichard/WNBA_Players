@@ -17,6 +17,7 @@ from enum import Enum
 import pandas as pd
 from pathlib import Path
 import logging
+from team_mapping import TeamNameMapper
 
 
 class HomeAway(Enum):
@@ -834,30 +835,6 @@ def create_game_id(
     """
     date_str = date.strftime('%Y%m%d')
     return f"{date_str}_{away_team}_{home_team}"
-
-
-def validate_team_abbreviation(team: str) -> bool:
-    """
-    Validate WNBA team abbreviation.
-    
-    Args:
-        team (str): Team abbreviation to validate
-        
-    Returns:
-        bool: True if valid WNBA team abbreviation
-    """
-    valid_teams = {
-        'ATL', 'CHI', 'CONN', 'DAL', 'IND', 'LAS', 'MIN', 'NY', 
-        'PHX', 'SEA', 'WAS', 'LV'  # LV for Las Vegas
-    }
-    return team.upper() in valid_teams
-
-
-# Type Aliases for Common Data Structures
-GameLogDict = Dict[str, Union[str, int, float, date]]
-PredictionDict = Dict[str, Union[str, float, datetime]]
-MetricsDict = Dict[str, Union[str, float, int]]
-ConfigDict = Dict[str, Union[str, int, float, List[str], Dict[str, float]]]
 
 
 if __name__ == "__main__":

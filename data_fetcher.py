@@ -25,6 +25,7 @@ from typing import Any, List, Optional
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup, Comment
+from team_mapping import TeamNameMapper
 
 ###############################################################################
 # 1.  HTTP helper
@@ -69,33 +70,7 @@ class RequestManager:
 # 2.  Team name standardisation
 ###############################################################################
 
-class TeamNameStandardizer:
-    _ABBR = {
-        "atlanta dream": "ATL", "dream": "ATL", "atl": "ATL",
-        "chicago sky": "CHI", "sky": "CHI", "chi": "CHI",
-        "connecticut sun": "CON", "sun": "CON", "conn": "CON",
-        "dallas wings": "DAL", "wings": "DAL", "dal": "DAL",
-        "indiana fever": "IND", "fever": "IND", "ind": "IND",
-        "los angeles sparks": "LAS", "sparks": "LAS", "las": "LAS", "la sparks": "LAS",
-        "las vegas aces": "LVA", "aces": "LVA", "vegas": "LVA", "lva": "LVA",
-        "minnesota lynx": "MIN", "lynx": "MIN", "min": "MIN",
-        "new york liberty": "NYL", "liberty": "NYL", "nyl": "NYL",
-        "phoenix mercury": "PHO", "mercury": "PHO", "pho": "PHO",
-        "seattle storm": "SEA", "storm": "SEA", "sea": "SEA",
-        "washington mystics": "WAS", "mystics": "WAS", "was": "WAS",
-        "golden state valkyries": "GSV", "valkyries": "GSV", "gsv": "GSV",
-    }
-    _SLUG = {
-        abbr: abbr for abbr in _ABBR.values()
-    }
-
-    @classmethod
-    def std(cls, raw: str | None) -> Optional[str]:
-        return cls._ABBR.get(raw.lower().strip()) if raw else None
-
-    @classmethod
-    def slug(cls, abbr: str) -> str:
-        return cls._SLUG.get(abbr, abbr)
+# Remove TeamNameStandardizer class
 
 ###############################################################################
 # 3.  Basketball‑Reference scraper
@@ -135,11 +110,12 @@ class BasketballReference:
             g_date = self._parse_date(dcell.get_text(strip=True), start.year)
             if not g_date or not (start <= g_date <= end):
                 continue
-            away = TeamNameStandardizer.std(vcell.get_text(strip=True))
-            home = TeamNameStandardizer.std(hcell.get_text(strip=True))
+            away = TeamNameMapper.to_abbreviation(vcell.get_text(strip=True))
+            home = TeamNameMapper.to_abbreviation(hcell.get_text(strip=True))
             if not away or not home:
+                logging.error(f"Unknown team(s) in schedule: away={vcell.get_text(strip=True)}, home={hcell.get_text(strip=True)}. Only real teams from team_mapping.py are allowed.")
                 continue
-            slug = TeamNameStandardizer.slug(home)
+            slug = TeamNameMapper.to_slug(home)
             dstr = g_date.strftime("%Y%m%d")
             games.append(
                 {
@@ -196,9 +172,9 @@ class BasketballReference:
             tbl_id = tbl.get("id", "")
             match = re.search(r"box-([a-z]{3})-game-basic", tbl_id, re.I)
             team_abbr_raw = match.group(1) if match else ""
-            player_team = TeamNameStandardizer.std(team_abbr_raw)
-
+            player_team = TeamNameMapper.to_abbreviation(team_abbr_raw)
             if not player_team:
+                logging.error(f"Unknown team in boxscore: {team_abbr_raw}. Only real teams from team_mapping.py are allowed.")
                 continue  # Skip unknown teams
 
             hdrs_raw = [th.get_text(strip=True) for th in tbl.find("thead").find_all("th")]

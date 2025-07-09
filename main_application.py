@@ -29,6 +29,7 @@ from pathlib import Path
 import json
 import random
 from dataclasses import asdict
+from team_mapping import TeamNameMapper
 
 # Add project directory to path if needed
 current_dir = Path(__file__).parent
@@ -40,7 +41,6 @@ try:
     from data_models import (
         GameSchedule, PlayerPrediction, PredictionConfig, HomeAway,
         WNBADataError, WNBAModelError, WNBAPredictionError,
-        validate_team_abbreviation
     )
     DATA_MODELS_AVAILABLE = True
 except ImportError as e:
@@ -323,10 +323,8 @@ class DataManager:
                     df['player'] = df[name_columns[0]]
                 else:
                     df['player'] = 'Unknown Player'
-            
             if 'team' not in df.columns:
-                df['team'] = 'UNK'
-            
+                raise ValueError("Missing 'team' column in game logs and cannot infer team. Only real teams from team_mapping.py are allowed.")
             if 'date' not in df.columns:
                 df['date'] = datetime.now().date()
         
@@ -361,55 +359,42 @@ class DataManager:
     
     def get_todays_schedule(self) -> Tuple[List[GameSchedule], bool]:
         """
-        Get today's game schedule.
-        
-        Returns:
-            Tuple of (games_list, is_real_data)
+        Get today's real-world schedule.
+        Raises WNBADataError if the schedule fetcher is unavailable or
+        returns an empty/placeholder payload.
         """
         today = date.today()
         self.logger.info(f"Getting schedule for {today}")
-        
+
         if not self.schedule_fetcher:
-            self.logger.warning("Schedule fetcher not available, using sample data")
-            return self._create_sample_schedule(today), False
-        
-        try:
-            games_data = self.schedule_fetcher.get_games_for_date(today)
-            
-            # Check if data is real
-            is_real_data = all(game.get('is_real_data', True) for game in games_data)
-            
-            if not is_real_data:
-                self.logger.warning("⚠️ Schedule data is sample/fake data")
-            
-            # Convert to GameSchedule objects
-            schedule = []
-            for game_data in games_data:
-                try:
-                    game_schedule = GameSchedule(
-                        game_id=f"{game_data['date']}_{game_data['away_team']}_{game_data['home_team']}",
-                        date=datetime.strptime(game_data['date'], '%Y-%m-%d').date(),
-                        home_team=game_data['home_team'],
-                        away_team=game_data['away_team'],
-                        game_time=game_data.get('game_time', 'TBD'),
-                        status=game_data.get('status', 'scheduled')
-                    )
-                    schedule.append(game_schedule)
-                except Exception as e:
-                    self.logger.warning(f"Error creating game schedule: {e}")
-                    continue
-            
-            return schedule, is_real_data
-            
-        except Exception as e:
-            self.logger.error(f"Failed to get today's schedule: {e}")
-            return self._create_sample_schedule(today), False
-    
+            raise WNBADataError("Schedule fetcher unavailable – cannot build predictions")
+
+        games_data = self.schedule_fetcher.get_games_for_date(today)
+        if not games_data:
+            raise WNBADataError(f"No schedule returned for {today}")
+
+        schedule = []
+        for g in games_data:
+            if not g.get("is_real_data", True):
+                raise WNBADataError("Received placeholder schedule – aborting")
+
+            schedule.append(
+                GameSchedule(
+                    game_id=f"{g['date']}_{g['away_team']}_{g['home_team']}",
+                    date=datetime.strptime(g['date'], "%Y-%m-%d").date(),
+                    home_team=g['home_team'],
+                    away_team=g['away_team'],
+                    game_time=g.get("game_time", "TBD"),
+                    status=g.get("status", "scheduled"),
+                )
+            )
+        return schedule, True
+
     def _create_sample_schedule(self, target_date: date) -> List[GameSchedule]:
         """Create sample game schedule for testing."""
         self.logger.warning("Creating sample schedule data")
         
-        teams = ['LV', 'NY', 'CHI', 'CONN', 'IND', 'PHX', 'SEA', 'ATL', 'DAL', 'MIN', 'WAS']
+        teams = sorted(TeamNameMapper.all_abbreviations())
         
         games = []
         for i in range(min(3, len(teams) // 2)):
@@ -631,52 +616,35 @@ class PredictionManager:
     ) -> List[PlayerPrediction]:
         """
         Generate predictions for scheduled games.
-        
-        Args:
-            schedule: List of scheduled games
-            model_manager: Trained model manager
-            data_manager: Data manager for historical data
-            
-        Returns:
-            List of player predictions
+        Only real player names and real data are used. No sample/demo predictions.
         """
         if not schedule:
             self.logger.warning("No games in schedule")
             return []
-        
         if not model_manager.is_trained():
-            self.logger.warning("Models not trained, generating sample predictions")
-            return self._generate_sample_predictions(schedule)
-        
+            self.logger.error("Models not trained. Cannot generate predictions.")
+            return []
         self.logger.info(f"Generating predictions for {len(schedule)} games")
-        
         predictions = []
-        
         try:
             # Load historical data for feature creation
             game_logs_df = data_manager.load_game_logs()
-            
             # Create features
             features_df = model_manager.prediction_model.feature_engineer.create_all_features(game_logs_df)
-            
             # Get latest features for each player
             latest_features = (
                 features_df.sort_values('date')
                 .groupby('player', as_index=False)
                 .tail(1)
             )
-            
             # Generate predictions for each game
             for game in schedule:
                 game_predictions = self._predict_game_players(game, latest_features, model_manager)
                 predictions.extend(game_predictions)
-            
             self.logger.info(f"✅ Generated {len(predictions)} player predictions")
-            
         except Exception as e:
             self.logger.error(f"Prediction generation failed: {e}")
-            return self._generate_sample_predictions(schedule)
-        
+            return []
         return predictions
     
     def _predict_game_players(
@@ -730,67 +698,6 @@ class PredictionManager:
                     continue
         
         return game_predictions
-    
-    def _generate_sample_predictions(self, schedule: List[GameSchedule]) -> List[PlayerPrediction]:
-        """Generate sample predictions for testing."""
-        self.logger.warning("Generating sample predictions")
-        
-        # Sample players for each team
-        team_rosters = {
-            'LV': ['A\'ja Wilson', 'Kelsey Plum', 'Jackie Young'],
-            'NY': ['Sabrina Ionescu', 'Breanna Stewart', 'Jonquel Jones'],
-            'CHI': ['Chennedy Carter', 'Angel Reese', 'Dana Evans'],
-            'CONN': ['Alyssa Thomas', 'DeWanna Bonner', 'DiJonai Carrington'],
-            'IND': ['Caitlin Clark', 'Aliyah Boston', 'Kelsey Mitchell'],
-            'PHX': ['Diana Taurasi', 'Brittney Griner', 'Kahleah Copper'],
-            'SEA': ['Jewell Loyd', 'Nneka Ogwumike', 'Skylar Diggins-Smith'],
-            'ATL': ['Rhyne Howard', 'Tina Charles', 'Allisha Gray'],
-            'DAL': ['Arike Ogunbowale', 'Satou Sabally', 'Teaira McCowan'],
-            'MIN': ['Napheesa Collier', 'Kayla McBride', 'Bridget Carleton'],
-            'WAS': ['Ariel Atkins', 'Elena Delle Donne', 'Aaliyah Edwards']
-        }
-        
-        predictions = []
-        
-        for game in schedule:
-            for team, is_home in [(game.home_team, True), (game.away_team, False)]:
-                opponent = game.away_team if is_home else game.home_team
-                players = team_rosters.get(team, [f"{team} Player 1", f"{team} Player 2", f"{team} Player 3"])
-                
-                for player in players:
-                    # Generate realistic stats based on player type
-                    if any(star in player for star in ['Wilson', 'Stewart', 'Clark', 'Ionescu', 'Taurasi']):
-                        # Star players
-                        points = max(0, random.normalvariate(22, 3))
-                        rebounds = max(0, random.normalvariate(8, 2))
-                        assists = max(0, random.normalvariate(6, 2))
-                        confidence = random.uniform(0.75, 0.95)
-                    else:
-                        # Role players
-                        points = max(0, random.normalvariate(12, 3))
-                        rebounds = max(0, random.normalvariate(5, 2))
-                        assists = max(0, random.normalvariate(3, 1.5))
-                        confidence = random.uniform(0.6, 0.8)
-                    
-                    prediction = PlayerPrediction(
-                        game_id=game.game_id,
-                        player=player,
-                        team=team,
-                        opponent=opponent,
-                        home_away=HomeAway.HOME if is_home else HomeAway.AWAY,
-                        predicted_points=round(points, 1),
-                        predicted_rebounds=round(rebounds, 1),
-                        predicted_assists=round(assists, 1),
-                        points_uncertainty=round(points * 0.2, 1),
-                        rebounds_uncertainty=round(rebounds * 0.25, 1),
-                        assists_uncertainty=round(assists * 0.3, 1),
-                        confidence_score=round(confidence, 2),
-                        model_version="sample_v1.0"
-                    )
-                    
-                    predictions.append(prediction)
-        
-        return predictions
     
     def export_predictions(
         self, 

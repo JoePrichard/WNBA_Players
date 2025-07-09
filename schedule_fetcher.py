@@ -20,6 +20,7 @@ from typing import List, Dict, Optional, Tuple
 import logging
 import re
 import time
+from team_mapping import TeamNameMapper
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,29 +48,8 @@ class WNBAScheduleFetcher:
         })
         
         # Current WNBA teams with all variations
-        self.team_mapping = {
-            # Primary mappings
-            'Atlanta Dream': 'ATL', 'Atlanta': 'ATL', 'Dream': 'ATL', 'ATL': 'ATL',
-            'Chicago Sky': 'CHI', 'Chicago': 'CHI', 'Sky': 'CHI', 'CHI': 'CHI',
-            'Connecticut Sun': 'CONN', 'Connecticut': 'CONN', 'Sun': 'CONN', 'CONN': 'CONN',
-            'Dallas Wings': 'DAL', 'Dallas': 'DAL', 'Wings': 'DAL', 'DAL': 'DAL',
-            'Indiana Fever': 'IND', 'Indiana': 'IND', 'Fever': 'IND', 'IND': 'IND',
-            'Los Angeles Sparks': 'LAS', 'Los Angeles': 'LAS', 'LA Sparks': 'LAS', 'Sparks': 'LAS', 'LAS': 'LAS',
-            'Las Vegas Aces': 'LV', 'Las Vegas': 'LV', 'Vegas': 'LV', 'Aces': 'LV', 'LV': 'LV',
-            'Minnesota Lynx': 'MIN', 'Minnesota': 'MIN', 'Lynx': 'MIN', 'MIN': 'MIN',
-            'New York Liberty': 'NY', 'New York': 'NY', 'Liberty': 'NY', 'NY': 'NY',
-            'Phoenix Mercury': 'PHX', 'Phoenix': 'PHX', 'Mercury': 'PHX', 'PHX': 'PHX',
-            'Seattle Storm': 'SEA', 'Seattle': 'SEA', 'Storm': 'SEA', 'SEA': 'SEA',
-            'Washington Mystics': 'WAS', 'Washington': 'WAS', 'Mystics': 'WAS', 'WAS': 'WAS',
-            
-            # ESPN specific variations
-            'ATLANTA': 'ATL', 'CHICAGO': 'CHI', 'CONNECTICUT': 'CONN', 'DALLAS': 'DAL',
-            'INDIANA': 'IND', 'LOS ANGELES': 'LAS', 'LAS VEGAS': 'LV', 'MINNESOTA': 'MIN',
-            'NEW YORK': 'NY', 'PHOENIX': 'PHX', 'SEATTLE': 'SEA', 'WASHINGTON': 'WAS',
-            'Golden State Valkyries': 'GSV', 'Golden State': 'GSV', 'Valkyries': 'GSV', 'GSV': 'GSV',
-        }
-        
-        self.valid_teams = {'ATL', 'CHI', 'CONN', 'DAL', 'IND', 'LAS', 'LV', 'MIN', 'NY', 'PHX', 'SEA', 'WAS', 'GSV'}
+        # Remove self.team_mapping and self.valid_teams
+        pass
     
     def get_games_for_date(self, target_date: date) -> List[Dict]:
         """Get games for date with enhanced real data sources."""
@@ -213,9 +193,8 @@ class WNBAScheduleFetcher:
                     # Map to abbreviations
                     home_abbr = self._map_team_name(home_team)
                     away_abbr = self._map_team_name(away_team)
-                    
                     if not home_abbr or not away_abbr:
-                        logger.debug(f"    ❌ Could not map: {away_team} @ {home_team}")
+                        logger.error(f"Unknown team(s) in ESPN schedule: away={away_team}, home={home_team}. Only real teams from team_mapping.py are allowed.")
                         continue
                     
                     # Game details
@@ -416,11 +395,11 @@ class WNBAScheduleFetcher:
             home_team = game.get('home_team', '').upper()
             away_team = game.get('away_team', '').upper()
             
-            if home_team not in self.valid_teams:
+            if not TeamNameMapper.is_valid_abbreviation(home_team):
                 logger.debug(f"    ❌ Invalid home team: {home_team}")
                 return False
             
-            if away_team not in self.valid_teams:
+            if not TeamNameMapper.is_valid_abbreviation(away_team):
                 logger.debug(f"    ❌ Invalid away team: {away_team}")
                 return False
             
@@ -431,41 +410,8 @@ class WNBAScheduleFetcher:
         return True
     
     def _map_team_name(self, team_name: str) -> Optional[str]:
-        """Enhanced team name mapping with fuzzy matching."""
-        if not team_name:
-            return None
-        
-        team_name = team_name.strip()
-        
-        # Direct lookup (case insensitive)
-        for name, abbr in self.team_mapping.items():
-            if team_name.lower() == name.lower():
-                return abbr
-        
-        # Partial matching
-        team_lower = team_name.lower()
-        for name, abbr in self.team_mapping.items():
-            if name.lower() in team_lower or team_lower in name.lower():
-                return abbr
-        
-        # Word-based matching
-        team_words = team_lower.split()
-        for word in team_words:
-            if word in ['dream', 'atlanta']: return 'ATL'
-            elif word in ['sky', 'chicago']: return 'CHI'
-            elif word in ['sun', 'connecticut']: return 'CONN'
-            elif word in ['wings', 'dallas']: return 'DAL'
-            elif word in ['fever', 'indiana']: return 'IND'
-            elif word in ['sparks', 'angeles']: return 'LAS'
-            elif word in ['aces', 'vegas']: return 'LV'
-            elif word in ['lynx', 'minnesota']: return 'MIN'
-            elif word in ['liberty', 'york']: return 'NY'
-            elif word in ['mercury', 'phoenix']: return 'PHX'
-            elif word in ['storm', 'seattle']: return 'SEA'
-            elif word in ['mystics', 'washington']: return 'WAS'
-        
-        logger.debug(f"    ❌ Could not map team: {team_name}")
-        return None
+        """Use centralized TeamNameMapper for mapping."""
+        return TeamNameMapper.to_abbreviation(team_name)
     
     def _should_provide_sample_data(self) -> bool:
         """Determine if sample data should be provided (development only)."""

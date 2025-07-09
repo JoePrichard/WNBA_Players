@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 import pandas as pd
 from datetime import datetime, date
+from team_mapping import TeamNameMapper
 
 
 def ensure_directories_exist(directories: List[str]) -> None:
@@ -63,71 +64,21 @@ def add_project_to_path() -> None:
 
 def validate_team_abbreviation(team: str) -> bool:
     """
-    Validate WNBA team abbreviation.
-    
-    Args:
-        team: Team abbreviation to validate
-        
-    Returns:
-        True if valid WNBA team abbreviation
+    Validate WNBA team abbreviation using centralized mapping.
     """
-    valid_teams = {
-        'ATL', 'CHI', 'CONN', 'CON', 'DAL', 'IND', 'LAS', 'LV',
-        'MIN', 'NY', 'NYL', 'PHX', 'PHO', 'SEA', 'WAS', 'GSV'
-    }
-    return team.upper() in valid_teams
+    return TeamNameMapper.is_valid_abbreviation(team)
 
 
 def standardize_team_name(team: str) -> str:
     """
-    Standardize team abbreviation to preferred format.
-    
-    Args:
-        team: Team abbreviation or name
-        
-    Returns:
-        Standardized team abbreviation
+    Standardize team abbreviation or name to preferred abbreviation using centralized mapping.
+    Raises ValueError if the team cannot be mapped.
     """
-    team_mappings = {
-        # Full names to abbreviations
-        'Atlanta Dream': 'ATL',
-        'Chicago Sky': 'CHI', 
-        'Connecticut Sun': 'CONN',
-        'Dallas Wings': 'DAL',
-        'Indiana Fever': 'IND',
-        'Los Angeles Sparks': 'LAS',
-        'Las Vegas Aces': 'LV',
-        'Minnesota Lynx': 'MIN',
-        'New York Liberty': 'NY',
-        'Phoenix Mercury': 'PHX',
-        'Seattle Storm': 'SEA',
-        'Washington Mystics': 'WAS',
-        'Golden State Valkyries': 'GSV',
-        
-        # Alternative abbreviations
-        'CON': 'CONN',
-        'LAS': 'LAS',  # Keep LAS for Sparks
-        'NYL': 'NY',
-        'PHO': 'PHX',
-        'LV': 'LV'
-    }
-    
-    # Try direct mapping first
-    if team in team_mappings:
-        return team_mappings[team]
-    
-    # Try uppercase
-    team_upper = team.upper()
-    if team_upper in team_mappings:
-        return team_mappings[team_upper]
-    
-    # Return as-is if already valid
-    if validate_team_abbreviation(team):
-        return team.upper()
-    
-    # Default fallback
-    logging.warning(f"Unknown team: {team}, using as-is")
-    return team.upper()
+    abbr = TeamNameMapper.to_abbreviation(team)
+    if abbr:
+        return abbr
+    logging.error(f"Unknown team: {team}. Only real teams from team_mapping.py are allowed.")
+    raise ValueError(f"Unknown team: {team}. Only real teams from team_mapping.py are allowed.")
 
 
 def safe_float_conversion(value: Any, default: float = 0.0) -> float:
@@ -377,11 +328,14 @@ if __name__ == "__main__":
     print("✅ Project structure initialized")
     
     # Test team validation
-    test_teams = ['LAS', 'NY', 'InvalidTeam', 'Los Angeles Sparks']
+    test_teams = list(TeamNameMapper.all_abbreviations()) + ['InvalidTeam', 'Los Angeles Sparks']
     for team in test_teams:
         valid = validate_team_abbreviation(team)
-        standardized = standardize_team_name(team)
-        print(f"Team: {team} → Valid: {valid}, Standardized: {standardized}")
+        try:
+            standardized = standardize_team_name(team)
+            print(f"Team: {team} → Valid: {valid}, Standardized: {standardized}")
+        except ValueError as e:
+            print(f"Team: {team} → Valid: {valid}, Standardization Error: {e}")
     
     # Test game ID creation
     game_id = create_game_id('2025-06-26', 'NY', 'LAS')
