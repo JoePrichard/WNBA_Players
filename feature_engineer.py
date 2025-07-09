@@ -33,6 +33,16 @@ class WNBAFeatureEngineer:
     leading to data leakage and artificially perfect R² scores.
     """
     
+    # Add a class-level constant for all stats to create features for
+    ALL_FEATURE_STATS = [
+        'points', 'assists', 'total_rebounds', 'minutes',
+        'fg_made', 'fg_attempted', 'fg_pct',
+        'fg3_made', 'fg3_attempted', 'fg3_pct',
+        'ft_made', 'ft_attempted', 'ft_pct',
+        'off_rebounds', 'def_rebounds',
+        'steals', 'blocks', 'turnovers', 'fouls', 'plus_minus'
+    ]
+    
     def __init__(
         self,
         config: Optional[PredictionConfig] = None,
@@ -241,7 +251,7 @@ class WNBAFeatureEngineer:
         df = df.copy()
         
         # Calculate rolling averages for recent form using LAGGED stats
-        for stat in self.target_stats:
+        for stat in self.ALL_FEATURE_STATS:
             if stat in df.columns:
                 # CRITICAL FIX: Use SHIFTED (lagged) values for features
                 # This prevents data leakage by only using past performance
@@ -396,9 +406,12 @@ class WNBAFeatureEngineer:
         df['feature_team_usage_spread'] = df.groupby(['team', 'date'])['feature_usage_rate'].transform('std').fillna(0.05)
         
         # Player role indicators (using lagged stats to avoid leakage)
-        df['feature_primary_scorer'] = (
-            df.get('feature_season_avg_points', 0) > df['feature_team_avg_minutes'] * 0.6
-        ).astype(int)
+        scorer_base = pd.Series(0.0, index=df.index)
+        if 'feature_season_avg_points' in df.columns:
+            scorer_col = df['feature_season_avg_points']
+            if isinstance(scorer_col, pd.Series):
+                scorer_base = scorer_col.fillna(0)
+        df['feature_primary_scorer'] = (scorer_base > df['feature_team_avg_minutes'] * 0.6).astype(int)
         
         return df
 

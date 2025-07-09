@@ -637,6 +637,9 @@ class PredictionManager:
                 .groupby('player', as_index=False)
                 .tail(1)
             )
+            # Diagnostic: Log unique teams present in latest_features
+            unique_teams = latest_features['team'].unique()
+            self.logger.info(f"Teams present in latest_features: {unique_teams}")
             # Generate predictions for each game
             for game in schedule:
                 game_predictions = self._predict_game_players(game, latest_features, model_manager)
@@ -955,7 +958,10 @@ Examples:
         logging.basicConfig(level=getattr(logging, log_level))
     
     # Load configuration
-    config = PredictionConfig()  # Use default for now
+    config = PredictionConfig(target_stats=[
+        "points", "assists", "total_rebounds", "minutes",
+        "fg_made", "fg_attempted", "fg_pct"
+    ])
     
     print("🏀 Enhanced WNBA Daily Game Prediction System")
     print("=" * 60)
