@@ -228,38 +228,87 @@ class WNBAPredictionModel:
 
     def _create_base_models(self) -> Dict[str, Any]:
         """
-        Create base models for ensemble.
-        
+        Create base models for ensemble using hyperparameters from config.models.
         Returns:
             Dictionary of model instances
         """
+        from config_loader import ConfigLoader, ModelConfig
+        import json
+        import copy
+        optuna_params = None
+        try:
+            with open("optuna_best_params.json", "r") as f:
+                optuna_params = json.load(f)
+        except Exception:
+            optuna_params = None
+
+        # Use config.models if available, else fallback to defaults
+        model_config = None
+        if hasattr(self.config, 'models'):
+            model_config = self.config.models
+        else:
+            try:
+                wnba_config = ConfigLoader.load_config()
+                model_config = wnba_config.models
+            except Exception:
+                model_config = ModelConfig()
+
+        # Helper to filter params for each model
+        def filter_params(params, allowed_keys):
+            return {k: v for k, v in params.items() if k in allowed_keys}
+
+        # Helper to get params: prefer optuna, then config, then fallback
+        def get_params(model_name, config_dict, optuna_key=None, allowed_keys=None):
+            if optuna_params and optuna_key and optuna_key in optuna_params:
+                params = copy.deepcopy(optuna_params[optuna_key]["best_params"])
+                # Add required defaults if missing
+                if model_name == "xgboost":
+                    params.setdefault("random_state", 42)
+                    params.setdefault("verbosity", 0)
+                elif model_name == "lightgbm":
+                    params.setdefault("random_state", 42)
+                    params.setdefault("verbosity", -1)
+                elif model_name == "random_forest":
+                    params.setdefault("random_state", 42)
+                    params.setdefault("n_jobs", -1)
+                if allowed_keys:
+                    params = filter_params(params, allowed_keys)
+                return params
+            elif config_dict:
+                if allowed_keys:
+                    return filter_params(config_dict, allowed_keys)
+                return config_dict
+            else:
+                return {}
+
+        xgb_allowed = {"n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "random_state", "verbosity"}
+        lgb_allowed = {"n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "random_state", "verbosity"}
+        rf_allowed = {"n_estimators", "max_depth", "min_samples_split", "min_samples_leaf", "random_state", "n_jobs"}
+        bayes_allowed = {"alpha_1", "alpha_2", "lambda_1", "lambda_2"}
+
+        xgb_params = get_params("xgboost", getattr(model_config, "xgboost", {}), "XGBoost", xgb_allowed)
+        lgb_params = get_params("lightgbm", getattr(model_config, "lightgbm", {}), "LightGBM", lgb_allowed)
+        rf_params = get_params("random_forest", getattr(model_config, "random_forest", {}), "RandomForest", rf_allowed)
+        # For BayesianRidge, ensure only the four float hyperparameters are passed
+        def get_bayes_params():
+            params = get_params("bayesian_ridge", {}, "BayesianRidge", bayes_allowed)
+            # Only keep the four float params and ensure no extra keys
+            filtered = {k: float(params[k]) for k in bayes_allowed if k in params}
+            # Fill missing with defaults
+            for k in bayes_allowed:
+                if k not in filtered:
+                    filtered[k] = 1e-6
+            # Remove any extra keys
+            filtered = {k: filtered[k] for k in bayes_allowed}
+            return filtered
+
+        bayes_params = get_bayes_params()
+
         return {
-            ModelType.XGBOOST.value: xgb.XGBRegressor(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                random_state=42,
-                verbosity=0
-            ),
-            ModelType.LIGHTGBM.value: lgb.LGBMRegressor(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                random_state=42,
-                verbosity=-1
-            ),
-            ModelType.RANDOM_FOREST.value: RandomForestRegressor(
-                n_estimators=100,
-                max_depth=8,
-                random_state=42,
-                n_jobs=-1
-            ),
-            ModelType.BAYESIAN_RIDGE.value: BayesianRidge(
-                alpha_1=1e-6,
-                alpha_2=1e-6,
-                lambda_1=1e-6,
-                lambda_2=1e-6
-            )
+            ModelType.XGBOOST.value: xgb.XGBRegressor(**xgb_params),
+            ModelType.LIGHTGBM.value: lgb.LGBMRegressor(**lgb_params),
+            ModelType.RANDOM_FOREST.value: RandomForestRegressor(**rf_params),
+            ModelType.BAYESIAN_RIDGE.value: BayesianRidge(**bayes_params)
         }
 
     def train_models_for_stat(
@@ -607,10 +656,19 @@ class WNBAPredictionModel:
                 
                 if stat_predictions:
                     # Ensemble prediction using configured weights
-                    weights = [self.config.model_weights.get(name, 0.25) for name in self.models[stat].keys()]
+                    # Use weights from ModelConfig
+                    model_weights = getattr(self.config, 'models', None)
+                    if model_weights and hasattr(model_weights, 'weights'):
+                        weights_dict = model_weights.weights
+                    else:
+                        # fallback: equal weights
+                        weights_dict = {name: 1.0 for name in self.models[stat].keys()}
+                    weights = [weights_dict.get(name, 0.25) for name in self.models[stat].keys()]
                     weights = np.array(weights[:len(stat_predictions)])
-                    weights = weights / weights.sum()  # Normalize
-                    
+                    if weights.sum() > 0:
+                        weights = weights / weights.sum()  # Normalize
+                    else:
+                        weights = np.ones_like(weights) / len(weights)
                     predictions[stat] = np.average(stat_predictions, weights=weights)
                     raw_uncertainty = np.std(stat_predictions) if len(stat_predictions) > 1 else 1.0
                     # Apply calibrator if available

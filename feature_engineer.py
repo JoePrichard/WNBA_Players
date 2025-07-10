@@ -113,6 +113,58 @@ class WNBAFeatureEngineer:
             '+/-': 'plus_minus',
         }
         df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
+
+        # --- DEBUG PRINTS ---
+        print("\n[DEBUG] Columns after renaming:")
+        print(df.columns.tolist())
+        print("\n[DEBUG] DataFrame head after renaming:")
+        print(df.head())
+        required_columns = [
+            'player', 'team', 'date', 'opponent', 'home_away',
+            'minutes', 'points', 'fg_made', 'fg_attempted', 'fg_pct',
+            'fg3_made', 'fg3_attempted', 'fg3_pct', 'ft_made', 'ft_attempted', 'ft_pct',
+            'off_rebounds', 'def_rebounds', 'total_rebounds', 'assists', 'steals', 'blocks',
+            'turnovers', 'fouls', 'plus_minus'
+        ]
+        print("\n[DEBUG] NaN counts in required columns after renaming:")
+        print(df[required_columns].isna().sum())
+
+        # Fill NaNs in percentage columns with 0.0 (these are not essential for row validity)
+        for pct_col in ['fg_pct', 'fg3_pct', 'ft_pct']:
+            if pct_col in df.columns:
+                s = pd.to_numeric(df[pct_col], errors='coerce')
+                df[pct_col] = s if isinstance(s, pd.Series) else df[pct_col]
+                try:
+                    df[pct_col] = df[pct_col].fillna(0.0)
+                except AttributeError:
+                    pass
+
+        # Convert 'minutes' from MM:SS string to float (total minutes)
+        if 'minutes' in df.columns:
+            def mmss_to_float(val):
+                try:
+                    if pd.isnull(val):
+                        return np.nan
+                    if isinstance(val, (int, float)):
+                        return float(val)
+                    parts = str(val).split(':')
+                    if len(parts) == 2:
+                        return int(parts[0]) + int(parts[1]) / 60.0
+                    return float(val)
+                except Exception:
+                    return np.nan
+            df['minutes'] = df['minutes'].apply(mmss_to_float)
+
+        # Only drop rows with missing values in truly essential columns
+        essential_columns = ['player', 'team', 'date', 'opponent', 'home_away', 'minutes', 'points']
+        initial_rows = len(df)
+        df = df.dropna(subset=essential_columns)
+        final_rows = len(df)
+        if final_rows < initial_rows:
+            self.logger.warning(f"Removed {initial_rows - final_rows} rows with missing key stats (essentials only)")
+        if df.empty:
+            raise WNBADataError("No valid rows remaining after cleaning")
+        
         # Strict team validation
         if 'team' in df.columns:
             df['team'] = df['team'].apply(lambda t: TeamNameMapper.to_abbreviation(t) if TeamNameMapper.to_abbreviation(t) else (_ for _ in ()).throw(ValueError(f"Unknown team: {t}. Only real teams from team_mapping.py are allowed.")))
@@ -123,13 +175,6 @@ class WNBAFeatureEngineer:
         if 'total_rebounds' not in df.columns and 'off_rebounds' in df.columns and 'def_rebounds' in df.columns:
             df['total_rebounds'] = df['off_rebounds'] + df['def_rebounds']
         
-        required_columns = [
-            'player', 'team', 'date', 'opponent', 'home_away',
-            'minutes', 'points', 'fg_made', 'fg_attempted', 'fg_pct',
-            'fg3_made', 'fg3_attempted', 'fg3_pct', 'ft_made', 'ft_attempted', 'ft_pct',
-            'off_rebounds', 'def_rebounds', 'total_rebounds', 'assists', 'steals', 'blocks',
-            'turnovers', 'fouls', 'plus_minus'
-        ]
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             raise WNBADataError(f"Missing required columns: {missing_columns}")
