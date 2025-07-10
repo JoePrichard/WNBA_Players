@@ -22,6 +22,7 @@ from data_models import (
     WNBADataError, PredictionConfig
 )
 from team_mapping import TeamNameMapper
+from utils import mmss_to_float
 
 
 class WNBAFeatureEngineer:
@@ -84,6 +85,22 @@ class WNBAFeatureEngineer:
         Map raw columns from data_fetcher.py to internal names.
         Enforce strict team validation: only real teams from team_mapping.py are allowed.
         """
+        # Ensure DataFrame is a copy to avoid view issues
+        df = df.copy()
+
+        # Filter out non-player rows (e.g., 'Reserves', empty, or header rows)
+        if 'Player' in df.columns:
+            df = df[~df['Player'].str.lower().isin(['reserves', '', 'mp', None])]
+        if 'player' in df.columns:
+            df = df[~df['player'].str.lower().isin(['reserves', '', 'mp', None])]
+
+        # Ensure 'float_minutes' is always present
+        if 'float_minutes' not in df.columns and 'MP' in df.columns:
+            df['float_minutes'] = df['MP'].apply(mmss_to_float)
+        elif 'float_minutes' not in df.columns:
+            df['float_minutes'] = 0.0
+        # Use 'float_minutes' everywhere minutes as a float are needed
+
         # Map Basketball Reference/stat CSV columns to internal names
         column_map = {
             'Date': 'date',
@@ -91,7 +108,8 @@ class WNBAFeatureEngineer:
             'Team': 'team',
             'Opponent': 'opponent',
             'Home/Away': 'home_away',
-            'MP': 'minutes',
+            # 'MP': 'minutes',  # Do not include
+            # 'minutes': 'minutes',  # Do not include
             'PTS': 'points',
             'FG': 'fg_made',
             'FGA': 'fg_attempted',
@@ -113,6 +131,50 @@ class WNBAFeatureEngineer:
             '+/-': 'plus_minus',
         }
         df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
+        print("\n[DEBUG] After renaming, columns:", df.columns.tolist())
+        print(df[df['player'].str.lower() == 'paige bueckers'][['player', 'minutes']])
+
+        # After renaming, ensure 'minutes' column exists
+        if 'minutes' not in df.columns:
+            if 'MP' in df.columns:
+                df['minutes'] = df['MP']
+                df = df.drop(columns=['MP'])
+            else:
+                raise WNBADataError("No 'minutes' or 'MP' column found after processing. Please check your input data.")
+
+        # DEBUG: Print unique 'minutes' values before conversion
+        if 'minutes' in df.columns:
+            print("\n[DEBUG] Unique 'minutes' values before conversion:", df['minutes'].unique())
+
+        # Convert 'minutes' from MM:SS string to float (total minutes)
+        if 'minutes' in df.columns:
+            def mmss_to_float(val):
+                try:
+                    if pd.isnull(val):
+                        return np.nan
+                    if isinstance(val, (int, float)):
+                        return float(val)
+                    val_str = str(val)
+                    if val_str.count(':') == 1:
+                        parts = val_str.split(':')
+                        if parts[0].isdigit() and parts[1].isdigit():
+                            return int(parts[0]) + int(parts[1]) / 60.0
+                        else:
+                            return np.nan
+                    # If it's a string but not MM:SS, try to cast to float
+                    return float(val_str) if val_str.replace('.', '', 1).isdigit() else np.nan
+                except Exception:
+                    return np.nan
+            df['minutes'] = df['minutes'].apply(mmss_to_float)
+            print("\n[DEBUG] Unique 'minutes' values after conversion:", df['minutes'].unique())
+
+        # DEBUG: Print Paige Bueckers' raw minutes before any conversion
+        paige_raw = df[df['player'].str.lower() == 'paige bueckers'.lower()]
+        if not paige_raw.empty:
+            print("\n[DEBUG] Paige Bueckers raw minutes before any conversion:")
+            print(paige_raw[['player', 'minutes']])
+        else:
+            print("\n[DEBUG] Paige Bueckers is missing from raw data before minutes conversion!")
 
         # --- DEBUG PRINTS ---
         print("\n[DEBUG] Columns after renaming:")
@@ -139,22 +201,6 @@ class WNBAFeatureEngineer:
                 except AttributeError:
                     pass
 
-        # Convert 'minutes' from MM:SS string to float (total minutes)
-        if 'minutes' in df.columns:
-            def mmss_to_float(val):
-                try:
-                    if pd.isnull(val):
-                        return np.nan
-                    if isinstance(val, (int, float)):
-                        return float(val)
-                    parts = str(val).split(':')
-                    if len(parts) == 2:
-                        return int(parts[0]) + int(parts[1]) / 60.0
-                    return float(val)
-                except Exception:
-                    return np.nan
-            df['minutes'] = df['minutes'].apply(mmss_to_float)
-
         # Only drop rows with missing values in truly essential columns
         essential_columns = ['player', 'team', 'date', 'opponent', 'home_away', 'minutes', 'points']
         initial_rows = len(df)
@@ -166,10 +212,12 @@ class WNBAFeatureEngineer:
             raise WNBADataError("No valid rows remaining after cleaning")
         
         # Strict team validation
+        def _raise_unknown_team(team, colname):
+            raise ValueError(f"Unknown {colname}: {team}. Only real teams from team_mapping.py are allowed.")
         if 'team' in df.columns:
-            df['team'] = df['team'].apply(lambda t: TeamNameMapper.to_abbreviation(t) if TeamNameMapper.to_abbreviation(t) else (_ for _ in ()).throw(ValueError(f"Unknown team: {t}. Only real teams from team_mapping.py are allowed.")))
+            df['team'] = df['team'].apply(lambda t: TeamNameMapper.to_abbreviation(t) if TeamNameMapper.to_abbreviation(t) else _raise_unknown_team(t, 'team'))
         if 'opponent' in df.columns:
-            df['opponent'] = df['opponent'].apply(lambda t: TeamNameMapper.to_abbreviation(t) if TeamNameMapper.to_abbreviation(t) else (_ for _ in ()).throw(ValueError(f"Unknown opponent: {t}. Only real teams from team_mapping.py are allowed.")))
+            df['opponent'] = df['opponent'].apply(lambda t: TeamNameMapper.to_abbreviation(t) if TeamNameMapper.to_abbreviation(t) else _raise_unknown_team(t, 'opponent'))
         
         # Ensure total_rebounds is present if off_rebounds and def_rebounds are available
         if 'total_rebounds' not in df.columns and 'off_rebounds' in df.columns and 'def_rebounds' in df.columns:
@@ -222,6 +270,13 @@ class WNBAFeatureEngineer:
         """
         df = df.copy()
         
+        # Ensure 'float_minutes' is always present
+        if 'float_minutes' not in df.columns and 'MP' in df.columns:
+            df['float_minutes'] = df['MP'].apply(mmss_to_float)
+        elif 'float_minutes' not in df.columns:
+            df['float_minutes'] = 0.0
+        # Use 'float_minutes' everywhere minutes as a float are needed
+
         # Fill missing values for stat columns with 0
         stat_columns = [
             'fg_made', 'fg_attempted', 'fg_pct',
@@ -255,19 +310,19 @@ class WNBAFeatureEngineer:
         
         # DERIVED efficiency metrics (these are OK as features since they're not direct targets)
         df['feature_usage_rate'] = np.where(
-            df['minutes'] > 0,
-            (df['fg_attempted'] + 0.44 * df['ft_attempted'] + df['turnovers']) / df['minutes'],
+            df['float_minutes'] > 0,
+            (df['fg_attempted'] + 0.44 * df['ft_attempted'] + df['turnovers']) / df['float_minutes'],
             0.2
         )
         # Remove feature_scoring_efficiency and feature_ts_pct from here
         df['feature_assist_rate'] = np.where(
-            df['minutes'] > 0,
-            df['assists'] / df['minutes'],
+            df['float_minutes'] > 0,
+            df['assists'] / df['float_minutes'],
             0.1
         )
         df['feature_rebound_rate'] = np.where(
-            df['minutes'] > 0,
-            df['total_rebounds'] / df['minutes'],
+            df['float_minutes'] > 0,
+            df['total_rebounds'] / df['float_minutes'],
             0.2
         )
         
@@ -281,6 +336,13 @@ class WNBAFeatureEngineer:
         """
         df = df.copy()
         
+        # Ensure 'float_minutes' is always present
+        if 'float_minutes' not in df.columns and 'MP' in df.columns:
+            df['float_minutes'] = df['MP'].apply(mmss_to_float)
+        elif 'float_minutes' not in df.columns:
+            df['float_minutes'] = 0.0
+        # Use 'float_minutes' everywhere minutes as a float are needed
+
         # Calculate rolling averages for recent form using LAGGED stats
         for stat in self.ALL_FEATURE_STATS:
             if stat in df.columns:
@@ -360,7 +422,7 @@ class WNBAFeatureEngineer:
         
         # --- NEW FEATURES ---
         # 1. Rolling 5/20-game pace of team possessions (team-level, lagged)
-        if 'team' in df.columns and 'date' in df.columns and 'minutes' in df.columns and 'fg_attempted' in df.columns and 'turnovers' in df.columns and 'ft_attempted' in df.columns and 'off_rebounds' in df.columns:
+        if 'team' in df.columns and 'date' in df.columns and 'float_minutes' in df.columns and 'fg_attempted' in df.columns and 'turnovers' in df.columns and 'ft_attempted' in df.columns and 'off_rebounds' in df.columns:
             # Estimate team possessions per game (NBA formula)
             df['team_possessions'] = (
                 df['fg_attempted'] + 0.44 * df['ft_attempted'] + df['turnovers'] - df['off_rebounds']
@@ -436,6 +498,13 @@ class WNBAFeatureEngineer:
         """
         df = df.copy()
         
+        # Ensure 'float_minutes' is always present
+        if 'float_minutes' not in df.columns and 'MP' in df.columns:
+            df['float_minutes'] = df['MP'].apply(mmss_to_float)
+        elif 'float_minutes' not in df.columns:
+            df['float_minutes'] = 0.0
+        # Use 'float_minutes' everywhere minutes as a float are needed
+
         # Rest days calculation
         df['prev_game_date'] = df.groupby('player')['date'].shift(1)
         df['feature_rest_days'] = (df['date'] - df['prev_game_date']).dt.days
@@ -517,6 +586,13 @@ class WNBAFeatureEngineer:
         """
         df = df.copy()
         
+        # Ensure 'float_minutes' is always present
+        if 'float_minutes' not in df.columns and 'MP' in df.columns:
+            df['float_minutes'] = df['MP'].apply(mmss_to_float)
+        elif 'float_minutes' not in df.columns:
+            df['float_minutes'] = 0.0
+        # Use 'float_minutes' everywhere minutes as a float are needed
+
         # Position-based features
         if 'position' not in df.columns:
             df['position'] = self._infer_positions(df)
@@ -541,7 +617,7 @@ class WNBAFeatureEngineer:
                     df[f'feature_{pos}_{stat_name}_expectation'] = df[f'feature_pos_is_{pos}'] * weight
         
         # Team context features - simplified to avoid merge issues
-        df['feature_team_avg_minutes'] = df.groupby(['team', 'date'])['minutes'].transform('mean')
+        df['feature_team_avg_minutes'] = df.groupby(['team', 'date'])['float_minutes'].transform('mean')
         df['feature_team_usage_spread'] = df.groupby(['team', 'date'])['feature_usage_rate'].transform('std').fillna(0.05)
         
         # Player role indicators (using lagged stats to avoid leakage)
@@ -657,7 +733,15 @@ class WNBAFeatureEngineer:
             self.logger.info(f"   - {len(self.feature_columns)} feature columns (starting with 'feature_')")
             self.logger.info(f"   - {len(target_columns)} target columns: {target_columns}")
             self.logger.info(f"   - CRITICAL: Target variables are EXCLUDED from features")
-            
+
+            # DEBUG: Print Paige Bueckers' row to check inclusion and team mapping
+            paige = df[df['player'].str.lower() == 'paige bueckers'.lower()]
+            if not paige.empty:
+                print("\n[DEBUG] Paige Bueckers row(s) after feature engineering:")
+                print(paige[['player', 'team', 'minutes', 'date']])
+            else:
+                print("\n[DEBUG] Paige Bueckers is missing from features after engineering!")
+
             return df
             
         except Exception as e:

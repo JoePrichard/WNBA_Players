@@ -36,6 +36,7 @@ from data_models import (
 )
 from feature_engineer import WNBAFeatureEngineer
 from team_mapping import TeamNameMapper
+from utils import mmss_to_float
 
 warnings.filterwarnings('ignore')
 
@@ -207,6 +208,13 @@ class WNBAPredictionModel:
             # Store feature columns
             self.feature_columns = self.feature_engineer.feature_columns
             
+            # Ensure 'float_minutes' is always present
+            if 'float_minutes' not in features_df.columns and 'MP' in features_df.columns:
+                features_df['float_minutes'] = features_df['MP'].apply(mmss_to_float)
+            elif 'float_minutes' not in features_df.columns:
+                features_df['float_minutes'] = 0.0
+            # Use 'float_minutes' everywhere minutes as a float are needed
+            
             # Validate we have enough data
             min_games = self.config.min_games_for_prediction
             player_counts = features_df.groupby('player').size()
@@ -215,8 +223,8 @@ class WNBAPredictionModel:
             if len(valid_players) == 0:
                 raise WNBAModelError(f"No players with at least {min_games} games")
             
-            # Filter to valid players
-            features_df = features_df[features_df['player'].isin(valid_players)]
+            # Filter to valid players and reset index for safe splitting
+            features_df = features_df[features_df['player'].isin(valid_players)].reset_index(drop=True)
             
             self.logger.info(f"Data prepared: {len(features_df)} games for {len(valid_players)} players")
             self.logger.info(f"Features: {len(self.feature_columns)} columns")
@@ -225,6 +233,22 @@ class WNBAPredictionModel:
             
         except Exception as e:
             raise WNBAModelError(f"Data preparation failed: {e}")
+
+    def _player_out_split(self, df, holdout_games=3):
+        # Ensure df is a DataFrame with a default RangeIndex if needed
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError("Input to _player_out_split must be a DataFrame")
+        df = df.sort_values(['player', 'date'])
+        if not df.index.is_monotonic_increasing or not isinstance(df.index, pd.RangeIndex):
+            df = df.reset_index(drop=True)
+        train_idx, test_idx = [], []
+        for p, grp in df.groupby('player'):
+            idx = grp.index.to_list()
+            if len(idx) <= holdout_games:
+                continue
+            train_idx.extend(idx[:-holdout_games])
+            test_idx.extend(idx[-holdout_games:])
+        return np.array(train_idx), np.array(test_idx)
 
     def _create_base_models(self) -> Dict[str, Any]:
         """
@@ -338,15 +362,10 @@ class WNBAPredictionModel:
         X = features_df[self.feature_columns].fillna(0)
         y = features_df[stat_name]
         
-        # Time series split (more realistic for sports)
-        tscv = TimeSeriesSplit(n_splits=3)
-        split_indices = list(tscv.split(X))
-        
-        if not split_indices:
-            raise WNBAModelError("Insufficient data for time series split")
-        
-        # Use last split for final training/validation
-        train_idx, test_idx = split_indices[-1]
+        # Player-out split: hold out last n games per player
+        train_idx, test_idx = self._player_out_split(features_df, holdout_games=3)
+        if len(train_idx) == 0 or len(test_idx) == 0:
+            raise WNBAModelError("Insufficient data for player-out split")
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
         

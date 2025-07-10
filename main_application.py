@@ -31,6 +31,7 @@ import random
 from dataclasses import asdict
 from team_mapping import TeamNameMapper
 from config_loader import ConfigLoader
+from utils import mmss_to_float
 
 # Add project directory to path if needed
 current_dir = Path(__file__).parent
@@ -265,6 +266,13 @@ class DataManager:
         try:
             # Load data
             df = pd.read_csv(target_file)
+            # DEBUG: Print file path and head of DataFrame after loading
+            print(f"\n[DEBUG] Loaded data from file: {target_file}")
+            print("[DEBUG] DataFrame head immediately after loading:")
+            print(df.head(20))
+            if 'Player' in df.columns:
+                print("[DEBUG] Unique MP values for Paige Bueckers after loading:")
+                print(df[df['Player'].str.lower() == 'paige bueckers']['MP'])
             
             if df.empty:
                 raise WNBADataError("Data file is empty")
@@ -335,12 +343,21 @@ class DataManager:
                 df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.date
             
             # Convert numeric columns
-            numeric_columns = ['points', 'total_rebounds', 'assists', 'minutes']
+            numeric_columns = ['points', 'total_rebounds', 'assists']  # Exclude 'minutes' here
             for col in numeric_columns:
                 if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+                    col_numeric = pd.to_numeric(df[col], errors='coerce')
+                    if isinstance(col_numeric, pd.Series):
+                        df[col] = col_numeric.fillna(0.0)
+                    else:
+                        df[col] = col_numeric
                 else:
                     df[col] = 0.0
+            # Convert 'minutes' column using mmss_to_float
+            if 'minutes' in df.columns:
+                df['minutes'] = df['minutes'].apply(mmss_to_float)
+            else:
+                df['minutes'] = 0.0
             
             # Clean text columns
             if 'player' in df.columns:
@@ -354,6 +371,13 @@ class DataManager:
         
         # Remove completely empty rows
         df = df.dropna(how='all')
+        
+        # Ensure 'float_minutes' is always present
+        if 'float_minutes' not in df.columns and 'MP' in df.columns:
+            df['float_minutes'] = df['MP'].apply(mmss_to_float)
+        elif 'float_minutes' not in df.columns:
+            df['float_minutes'] = 0.0
+        # Use 'float_minutes' everywhere minutes as a float are needed
         
         self.logger.info(f"Data cleaning complete: {len(df)} records")
         return df
@@ -671,7 +695,8 @@ class PredictionManager:
                 continue
             
             # Select top players by minutes played
-            team_players = team_players.sort_values('minutes', ascending=False).head(8)
+            team_players = team_players.assign(float_minutes=team_players['MP'].apply(mmss_to_float))
+            team_players = team_players.sort_values('float_minutes', ascending=False).head(8)
             
             for _, player_row in team_players.iterrows():
                 try:

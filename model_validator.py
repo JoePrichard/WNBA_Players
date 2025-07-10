@@ -34,6 +34,7 @@ from data_models import (
 )
 from prediction_models import WNBAPredictionModel
 from feature_engineer import WNBAFeatureEngineer
+from utils import mmss_to_float
 
 
 class WNBAModelValidator:
@@ -109,6 +110,13 @@ class WNBAModelValidator:
             game_logs_df = game_logs_df.copy()
             game_logs_df['date'] = pd.to_datetime(game_logs_df['date'])
             game_logs_df = game_logs_df.sort_values(['date', 'player']).reset_index(drop=True)
+            
+            # Ensure 'float_minutes' is always present
+            if 'float_minutes' not in game_logs_df.columns and 'MP' in game_logs_df.columns:
+                game_logs_df['float_minutes'] = game_logs_df['MP'].apply(mmss_to_float)
+            elif 'float_minutes' not in game_logs_df.columns:
+                game_logs_df['float_minutes'] = 0.0
+            # Use 'float_minutes' everywhere minutes as a float are needed
             
             # Get date range
             start_date = game_logs_df['date'].min()

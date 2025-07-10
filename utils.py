@@ -318,6 +318,23 @@ def validate_data_quality(df: pd.DataFrame, required_columns: List[str]) -> Dict
     return report
 
 
+def mmss_to_float(val):
+    try:
+        import pandas as pd
+        if pd.isnull(val):
+            return 0.0
+        if isinstance(val, (int, float)):
+            return float(val)
+        val_str = str(val)
+        if ':' in val_str:
+            parts = val_str.split(':')
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                return int(parts[0]) + int(parts[1]) / 60.0
+        return float(val_str) if val_str.replace('.', '', 1).isdigit() else 0.0
+    except Exception:
+        return 0.0
+
+
 if __name__ == "__main__":
     """Demo and testing of utility functions."""
     print("🔧 WNBA Prediction System - Utilities Demo")
