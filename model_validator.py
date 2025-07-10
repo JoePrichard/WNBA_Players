@@ -12,6 +12,7 @@ import logging
 import os
 from dataclasses import asdict
 import json
+from sklearn.isotonic import IsotonicRegression
 
 # Visualization
 import matplotlib.pyplot as plt
@@ -75,6 +76,8 @@ class WNBAModelValidator:
         # Setup logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
+
+        self.uncertainty_calibrators: Dict[str, IsotonicRegression] = {}
 
     def time_series_validation(
         self,
@@ -194,6 +197,12 @@ class WNBAModelValidator:
             # Make predictions on test data
             predictions_df = self._make_period_predictions(temp_model, test_data)
             
+            # Calibrate uncertainty for each stat and store calibrator
+            for stat in self.config.target_stats:
+                calibrator = self.calibrate_uncertainty(predictions_df, stat)
+                if calibrator is not None:
+                    self.uncertainty_calibrators[stat] = calibrator
+            
             # Calculate metrics for each statistic
             period_metrics = {}
             for stat in self.config.target_stats:
@@ -226,7 +235,12 @@ class WNBAModelValidator:
         for _, row in test_data.iterrows():
             try:
                 # Get feature vector for this player-game
-                feature_vector = row[model.feature_columns].fillna(0.0).values
+                feature_vector = row[model.feature_columns]
+                import numpy as np
+                import pandas as pd
+                if isinstance(feature_vector, np.ndarray):
+                    feature_vector = pd.Series(feature_vector, index=model.feature_columns)
+                feature_vector = feature_vector.fillna(0.0)
                 
                 # Make prediction
                 prediction = model.predict_player_stats(feature_vector)
@@ -322,6 +336,35 @@ class WNBAModelValidator:
         except Exception as e:
             self.logger.warning(f"Metrics calculation failed for {stat}: {e}")
             return {}
+
+    def calibrate_uncertainty(self, predictions_df: pd.DataFrame, stat: str) -> Optional[IsotonicRegression]:
+        """
+        Fit isotonic regression to calibrate uncertainty for a given stat.
+        Returns the fitted IsotonicRegression model.
+        """
+        actual_col = f'actual_{stat}'
+        pred_col = f'predicted_{stat}'
+        unc_col = f'{stat}_uncertainty'
+        if not all(col in predictions_df.columns for col in [actual_col, pred_col, unc_col]):
+            return None
+        actual = np.asarray(predictions_df[actual_col].values, dtype=np.float64)
+        predicted = np.asarray(predictions_df[pred_col].values, dtype=np.float64)
+        raw_sigma = np.asarray(predictions_df[unc_col].values, dtype=np.float64)
+        # Compute absolute residuals
+        abs_resid = np.abs(actual - predicted)
+        # Fit isotonic regression: raw_sigma -> abs_resid / 1.96 (so that 95% of abs_resid ≈ 1.96*calibrated_sigma)
+        # Only use finite values
+        mask = np.isfinite(raw_sigma) & np.isfinite(abs_resid)
+        if np.sum(mask) < 10:
+            return None
+        x = raw_sigma[mask]
+        y = abs_resid[mask] / 1.96
+        # To avoid degenerate fit, add a small jitter if all x are identical
+        if np.all(x == x[0]):
+            x = x + np.random.normal(0, 1e-6, size=x.shape)
+        calibrator = IsotonicRegression(out_of_bounds='clip')
+        calibrator.fit(x, y)
+        return calibrator
 
     def generate_validation_report(self) -> Dict[str, Any]:
         """

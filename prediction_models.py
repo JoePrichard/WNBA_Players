@@ -176,6 +176,7 @@ class WNBAPredictionModel:
         self.feature_columns: List[str] = []
         self.is_trained = False
         self.model_version = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.uncertainty_calibrators: Dict[str, Any] = {}  # stat -> calibrator
         
         # Setup logging
         logging.basicConfig(level=logging.INFO)
@@ -533,12 +534,21 @@ class WNBAPredictionModel:
         except Exception as e:
             raise WNBAModelError(f"Model training failed: {e}")
 
+    def set_uncertainty_calibrators(self, calibrators: Dict[str, Any]):
+        """
+        Set uncertainty calibrators (e.g., isotonic regression models) for each stat.
+        Args:
+            calibrators: dict mapping stat name to fitted calibrator (must have .predict method)
+        """
+        self.uncertainty_calibrators = calibrators or {}
+
     def predict_player_stats(
         self, 
         player_features: Union[Dict[str, float], pd.Series, np.ndarray]
     ) -> PlayerPrediction:
         """
         Predict statistics for a single player.
+        If self.uncertainty_calibrators is set, use them to calibrate uncertainties for each stat.
         
         Args:
             player_features: Features for prediction (dict, Series, or array)
@@ -602,7 +612,17 @@ class WNBAPredictionModel:
                     weights = weights / weights.sum()  # Normalize
                     
                     predictions[stat] = np.average(stat_predictions, weights=weights)
-                    uncertainties[stat] = np.std(stat_predictions) if len(stat_predictions) > 1 else 1.0
+                    raw_uncertainty = np.std(stat_predictions) if len(stat_predictions) > 1 else 1.0
+                    # Apply calibrator if available
+                    calibrator = self.uncertainty_calibrators.get(stat)
+                    if calibrator is not None:
+                        try:
+                            calibrated = calibrator.predict([raw_uncertainty])[0]
+                            uncertainties[stat] = float(np.clip(calibrated, 0.0, None))
+                        except Exception:
+                            uncertainties[stat] = raw_uncertainty
+                    else:
+                        uncertainties[stat] = raw_uncertainty
                 else:
                     predictions[stat] = 0.0
                     uncertainties[stat] = 1.0

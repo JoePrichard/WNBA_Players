@@ -313,6 +313,76 @@ class WNBAFeatureEngineer:
         df['feature_early_season'] = (df['feature_game_number_season'] <= 10).astype(int)
         df['feature_late_season'] = (df['feature_game_number_season'] >= 25).astype(int)
         
+        # --- NEW FEATURES ---
+        # 1. Rolling 5/20-game pace of team possessions (team-level, lagged)
+        if 'team' in df.columns and 'date' in df.columns and 'minutes' in df.columns and 'fg_attempted' in df.columns and 'turnovers' in df.columns and 'ft_attempted' in df.columns and 'off_rebounds' in df.columns:
+            # Estimate team possessions per game (NBA formula)
+            df['team_possessions'] = (
+                df['fg_attempted'] + 0.44 * df['ft_attempted'] + df['turnovers'] - df['off_rebounds']
+            )
+            df['team_possessions'] = df['team_possessions'].fillna(0.0)
+            # Lagged by one game, rolling by team
+            for window in [5, 20]:
+                team_poss_lagged = df.groupby('team')['team_possessions'].shift(1)
+                df[f'feature_team_possessions_l{window}'] = (
+                    team_poss_lagged.groupby(df['team'])
+                    .rolling(window=window, min_periods=1)
+                    .mean().reset_index(0, drop=True)
+                ).fillna(0.0)
+        # 2. Opponent defensive four-factor stats (lagged by one game)
+        if 'opponent' in df.columns and 'date' in df.columns:
+            # Defensive eFG% allowed by opponent (lagged)
+            opp_fg_made = df.groupby('opponent')['fg_made'].shift(1)
+            opp_fg3_made = df.groupby('opponent')['fg3_made'].shift(1)
+            opp_fg_attempted = df.groupby('opponent')['fg_attempted'].shift(1)
+            df['feature_opp_def_efg_pct'] = np.where(
+                opp_fg_attempted > 0,
+                (opp_fg_made + 0.5 * opp_fg3_made) / opp_fg_attempted,
+                0.0
+            )
+            # Defensive OREB% allowed by opponent (lagged)
+            opp_oreb = df.groupby('opponent')['off_rebounds'].shift(1)
+            team_dreb = df.groupby('opponent')['def_rebounds'].shift(1)
+            oreb_denom = opp_oreb + team_dreb
+            df['feature_opp_def_oreb_pct'] = np.where(
+                oreb_denom > 0,
+                opp_oreb / oreb_denom,
+                0.0
+            )
+            # Defensive FTR allowed by opponent (lagged)
+            opp_ft_attempted = df.groupby('opponent')['ft_attempted'].shift(1)
+            df['feature_opp_def_ftr'] = np.where(
+                opp_fg_attempted > 0,
+                opp_ft_attempted / opp_fg_attempted,
+                0.0
+            )
+            # Defensive TOV% allowed by opponent (lagged)
+            opp_turnovers = df.groupby('opponent')['turnovers'].shift(1)
+            tov_denom = opp_fg_attempted + 0.44 * opp_ft_attempted + opp_turnovers
+            df['feature_opp_def_tov_pct'] = np.where(
+                tov_denom > 0,
+                opp_turnovers / tov_denom,
+                0.0
+            )
+        # 3. Player usage% and assist%, season-long (expanding window, lagged)
+        if 'player' in df.columns and 'team' in df.columns:
+            lagged_fga = df.groupby('player')['fg_attempted'].shift(1)
+            lagged_fta = df.groupby('player')['ft_attempted'].shift(1)
+            lagged_tov = df.groupby('player')['turnovers'].shift(1)
+            lagged_team_poss = df.groupby('team')['team_possessions'].shift(1)
+            usage_numer = lagged_fga + 0.44 * lagged_fta + lagged_tov
+            usage_pct = np.where(lagged_team_poss > 0, usage_numer / lagged_team_poss, 0.0)
+            df['feature_season_avg_usage_pct'] = (
+                pd.Series(usage_pct, index=df.index).groupby(df['player']).expanding(min_periods=1).mean().reset_index(0, drop=True)
+            ).fillna(0.0)
+            # Assist% (season-long, expanding window)
+            lagged_ast = df.groupby('player')['assists'].shift(1)
+            lagged_team_fgm = df.groupby('team')['fg_made'].shift(1)
+            assist_pct = np.where(lagged_team_fgm > 0, lagged_ast / lagged_team_fgm, 0.0)
+            df['feature_season_avg_assist_pct'] = (
+                pd.Series(assist_pct, index=df.index).groupby(df['player']).expanding(min_periods=1).mean().reset_index(0, drop=True)
+            ).fillna(0.0)
+        
         return df
 
     def create_context_features(self, df: pd.DataFrame) -> pd.DataFrame:

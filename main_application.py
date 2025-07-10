@@ -30,6 +30,7 @@ import json
 import random
 from dataclasses import asdict
 from team_mapping import TeamNameMapper
+from config_loader import ConfigLoader
 
 # Add project directory to path if needed
 current_dir = Path(__file__).parent
@@ -957,18 +958,18 @@ Examples:
     else:
         logging.basicConfig(level=getattr(logging, log_level))
     
-    # Load configuration
-    config = PredictionConfig(target_stats=[
-        "points", "assists", "total_rebounds", "minutes",
-        "fg_made", "fg_attempted", "fg_pct"
-    ])
+    # Load configuration from file (default: config.toml or user-supplied)
+    # NOTE: The config file now controls all prediction targets and settings. Hardcoded values are removed.
+    config_path = args.config if args.config else None
+    wnba_config = ConfigLoader.load_config(config_path)
+    prediction_config = wnba_config.prediction
     
-    print("🏀 Enhanced WNBA Daily Game Prediction System")
+    print("\U0001F3C0 Enhanced WNBA Daily Game Prediction System")
     print("=" * 60)
     
     try:
-        # Initialize predictor
-        predictor = WNBADailyPredictor(config=config)
+        # Initialize predictor with config from file
+        predictor = WNBADailyPredictor(config=prediction_config)
         
         # Execute requested action
         if args.check_data:
