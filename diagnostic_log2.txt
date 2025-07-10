@@ -1,5 +1,0 @@
-🏀 Enhanced WNBA Daily Game Prediction System
-============================================================
-✅ Loaded latest models
-
-❌ No predictions generated

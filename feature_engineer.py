@@ -214,30 +214,16 @@ class WNBAFeatureEngineer:
             (df['fg_attempted'] + 0.44 * df['ft_attempted'] + df['turnovers']) / df['minutes'],
             0.2
         )
-        
-        df['feature_scoring_efficiency'] = np.where(
-            df['fg_attempted'] > 0,
-            df['points'] / df['fg_attempted'],
-            1.0
-        )
-        
+        # Remove feature_scoring_efficiency and feature_ts_pct from here
         df['feature_assist_rate'] = np.where(
             df['minutes'] > 0,
             df['assists'] / df['minutes'],
             0.1
         )
-        
         df['feature_rebound_rate'] = np.where(
             df['minutes'] > 0,
             df['total_rebounds'] / df['minutes'],
             0.2
-        )
-        
-        # True shooting percentage
-        df['feature_ts_pct'] = np.where(
-            (df['fg_attempted'] + 0.44 * df['ft_attempted']) > 0,
-            df['points'] / (2 * (df['fg_attempted'] + 0.44 * df['ft_attempted'])),
-            0.0
         )
         
         return df
@@ -277,6 +263,44 @@ class WNBAFeatureEngineer:
                 df[f'feature_{stat}_momentum'] = (
                     df[f'feature_{stat}_l{self.lookback_games}'] - df[f'feature_season_avg_{stat}']
                 )
+        # Add lagged efficiency features
+        # Lagged scoring efficiency: points/fg_attempted (previous games only)
+        lagged_points = df.groupby('player')['points'].shift(1)
+        lagged_fg_attempted = df.groupby('player')['fg_attempted'].shift(1)
+        lagged_ft_attempted = df.groupby('player')['ft_attempted'].shift(1)
+        # Avoid division by zero
+        lagged_scoring_eff = np.where(lagged_fg_attempted > 0, lagged_points / lagged_fg_attempted, 1.0)
+        lagged_ts_denom = (lagged_fg_attempted + 0.44 * lagged_ft_attempted)
+        lagged_ts_pct = np.where(lagged_ts_denom > 0, lagged_points / (2 * lagged_ts_denom), 0.0)
+        # Rolling mean for last N games
+        df['feature_scoring_efficiency_l' + str(self.lookback_games)] = (
+            pd.Series(lagged_scoring_eff, index=df.index).groupby(df['player'])
+            .rolling(window=self.lookback_games, min_periods=1)
+            .mean().reset_index(0, drop=True)
+        )
+        df['feature_ts_pct_l' + str(self.lookback_games)] = (
+            pd.Series(lagged_ts_pct, index=df.index).groupby(df['player'])
+            .rolling(window=self.lookback_games, min_periods=1)
+            .mean().reset_index(0, drop=True)
+        )
+        # Season averages (expanding window)
+        df['feature_season_avg_scoring_efficiency'] = (
+            pd.Series(lagged_scoring_eff, index=df.index).groupby(df['player'])
+            .expanding(min_periods=1)
+            .mean().reset_index(0, drop=True)
+        )
+        df['feature_season_avg_ts_pct'] = (
+            pd.Series(lagged_ts_pct, index=df.index).groupby(df['player'])
+            .expanding(min_periods=1)
+            .mean().reset_index(0, drop=True)
+        )
+        # Momentum for efficiency features
+        df['feature_scoring_efficiency_momentum'] = (
+            df['feature_scoring_efficiency_l' + str(self.lookback_games)] - df['feature_season_avg_scoring_efficiency']
+        )
+        df['feature_ts_pct_momentum'] = (
+            df['feature_ts_pct_l' + str(self.lookback_games)] - df['feature_season_avg_ts_pct']
+        )
         
         # Game number in season
         df['feature_game_number_season'] = df.groupby('player').cumcount() + 1
