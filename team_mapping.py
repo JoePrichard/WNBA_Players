@@ -3,7 +3,7 @@ team_mapping.py - Centralized WNBA Team Name/Abbreviation Mapping
 
 Provides a single source of truth for all team name/abbreviation normalization and validation.
 """
-from typing import Optional, Set
+from typing import Optional, Set, List, Dict, Tuple, Any
 import logging
 
 class TeamNameMapper:

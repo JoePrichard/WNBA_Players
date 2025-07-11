@@ -168,7 +168,7 @@ def get_latest_file(directory: str, pattern: str = "*.csv") -> Optional[Path]:
     return max(files, key=lambda x: x.stat().st_mtime)
 
 
-def create_game_id(date: Union[date, str], away_team: str, home_team: str) -> str:
+def create_game_id(date: Any, away_team: str, home_team: str) -> str:
     """
     Create standardized game identifier.
     
@@ -318,7 +318,7 @@ def validate_data_quality(df: pd.DataFrame, required_columns: List[str]) -> Dict
     return report
 
 
-def mmss_to_float(val):
+def mmss_to_float(val: Any) -> float:
     try:
         import pandas as pd
         if pd.isnull(val):

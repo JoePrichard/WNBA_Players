@@ -12,6 +12,7 @@ import logging
 import os
 from glob import glob
 import json
+from typing import Tuple, List, Dict, Callable, Any
 
 from feature_engineer import WNBAFeatureEngineer
 from prediction_models import WNBAPredictionModel, StatsNeuralNetwork, StatsDataset
@@ -30,13 +31,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("optuna_sweeps")
 
 # --- DATA LOADING ---
-def find_latest_csv(data_dir="wnba_game_data"):
+def find_latest_csv(data_dir: str = "wnba_game_data") -> str:
     csv_files = sorted(glob(os.path.join(data_dir, "*.csv")), key=os.path.getmtime, reverse=True)
     if not csv_files:
         raise FileNotFoundError(f"No CSV files found in {data_dir}/")
     return csv_files[0]
 
-def load_and_engineer_data():
+def load_and_engineer_data() -> Tuple[pd.DataFrame, List[str]]:
     # Load from CSV instead of scraping
     if CSV_FILENAME:
         csv_path = os.path.join("wnba_game_data", CSV_FILENAME)
@@ -49,15 +50,6 @@ def load_and_engineer_data():
     logger.info(f"Loaded {len(df)} rows.")
 
     # --- DIAGNOSTIC PRINTS ---
-    print("\n[DIAGNOSTIC] Raw DataFrame head:")
-    print(df.head())
-    print("\n[DIAGNOSTIC] Raw DataFrame columns:")
-    print(df.columns.tolist())
-    # Print NaN counts for likely key columns
-    key_cols = [col for col in df.columns if col.lower() in ['player', 'points', 'minutes', 'mp', 'pts']]
-    print("\n[DIAGNOSTIC] NaN counts in key columns:")
-    print(df[key_cols].isna().sum())
-
     logger.info("Engineering features...")
     fe = WNBAFeatureEngineer()
     df = fe.create_all_features(df)
@@ -66,7 +58,11 @@ def load_and_engineer_data():
     return df, feature_columns
 
 # --- TRAIN/TEST SPLIT ---
-def get_train_test(df, feature_columns, stat):
+def get_train_test(
+    df: pd.DataFrame,
+    feature_columns: List[str],
+    stat: str
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     X = df[feature_columns].fillna(0)
     y = df[stat]
     tscv = TimeSeriesSplit(n_splits=3)
@@ -77,7 +73,13 @@ def get_train_test(df, feature_columns, stat):
     return X_train, X_test, y_train, y_test
 
 # --- OPTUNA OBJECTIVES ---
-def objective_xgb(trial, X_train, X_test, y_train, y_test):
+def objective_xgb(
+    trial: optuna.trial.Trial,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series
+) -> float:
     params = {
         'n_estimators': trial.suggest_int('n_estimators', 50, 300),
         'max_depth': trial.suggest_int('max_depth', 3, 12),
@@ -92,7 +94,13 @@ def objective_xgb(trial, X_train, X_test, y_train, y_test):
     y_pred = model.predict(X_test)
     return mean_absolute_error(y_test, y_pred)
 
-def objective_lgb(trial, X_train, X_test, y_train, y_test):
+def objective_lgb(
+    trial: optuna.trial.Trial,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series
+) -> float:
     params = {
         'n_estimators': trial.suggest_int('n_estimators', 50, 300),
         'max_depth': trial.suggest_int('max_depth', 3, 12),
@@ -107,7 +115,13 @@ def objective_lgb(trial, X_train, X_test, y_train, y_test):
     y_pred = model.predict(X_test)
     return mean_absolute_error(y_test, y_pred)
 
-def objective_rf(trial, X_train, X_test, y_train, y_test):
+def objective_rf(
+    trial: optuna.trial.Trial,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series
+) -> float:
     params = {
         'n_estimators': trial.suggest_int('n_estimators', 50, 300),
         'max_depth': trial.suggest_int('max_depth', 3, 20),
@@ -121,7 +135,13 @@ def objective_rf(trial, X_train, X_test, y_train, y_test):
     y_pred = model.predict(X_test)
     return mean_absolute_error(y_test, y_pred)
 
-def objective_bayes(trial, X_train, X_test, y_train, y_test):
+def objective_bayes(
+    trial: optuna.trial.Trial,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series
+) -> float:
     params = {
         'alpha_1': trial.suggest_float('alpha_1', 1e-7, 1e-5, log=True),
         'alpha_2': trial.suggest_float('alpha_2', 1e-7, 1e-5, log=True),
@@ -136,7 +156,13 @@ def objective_bayes(trial, X_train, X_test, y_train, y_test):
     y_pred = model.predict(X_test_scaled)
     return mean_absolute_error(y_test, y_pred)
 
-def objective_nn(trial, X_train, X_test, y_train, y_test):
+def objective_nn(
+    trial: optuna.trial.Trial,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series
+) -> float:
     # Hyperparameters for NN
     hidden_dim = trial.suggest_categorical('hidden_dim', [32, 64, 128])
     n_layers = trial.suggest_int('n_layers', 1, 3)
@@ -191,7 +217,14 @@ def objective_nn(trial, X_train, X_test, y_train, y_test):
     return mean_absolute_error(y_test_np, y_pred)
 
 # --- MAIN SWEEP FUNCTION ---
-def run_optuna_sweep(model_name, objective_fn, X_train, X_test, y_train, y_test):
+def run_optuna_sweep(
+    model_name: str,
+    objective_fn: Callable[[optuna.trial.Trial, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series], float],
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series
+) -> Tuple[float, Dict[str, Any]]:
     logger.info(f"Running Optuna sweep for {model_name}...")
     study = optuna.create_study(direction='minimize', sampler=optuna.samplers.TPESampler(seed=RANDOM_STATE))
     study.optimize(lambda trial: objective_fn(trial, X_train, X_test, y_train, y_test), n_trials=N_TRIALS, show_progress_bar=True)
@@ -200,7 +233,13 @@ def run_optuna_sweep(model_name, objective_fn, X_train, X_test, y_train, y_test)
     return study.best_value, study.best_params
 
 # --- BASELINE (VANILLA) MAE ---
-def get_vanilla_mae(model_cls, X_train, X_test, y_train, y_test):
+def get_vanilla_mae(
+    model_cls: Any,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series
+) -> float:
     if model_cls == xgb.XGBRegressor:
         model = model_cls(n_estimators=100, max_depth=6, learning_rate=0.1, random_state=RANDOM_STATE, verbosity=0)
     elif model_cls == lgb.LGBMRegressor:
@@ -220,7 +259,7 @@ def get_vanilla_mae(model_cls, X_train, X_test, y_train, y_test):
     return mean_absolute_error(y_test, y_pred)
 
 # --- MAIN SCRIPT ---
-def main():
+def main() -> None:
     df, feature_columns = load_and_engineer_data()
     X_train, X_test, y_train, y_test = get_train_test(df, feature_columns, STAT_TO_PREDICT)
 
@@ -229,41 +268,41 @@ def main():
     # XGBoost
     vanilla_mae_xgb = get_vanilla_mae(xgb.XGBRegressor, X_train, X_test, y_train, y_test)
     best_mae_xgb, best_params_xgb = run_optuna_sweep('XGBoost', objective_xgb, X_train, X_test, y_train, y_test)
-    print(f"\nXGBoost: Vanilla MAE = {vanilla_mae_xgb:.4f}, Optuna Best MAE = {best_mae_xgb:.4f}, Improvement = {100*(vanilla_mae_xgb-best_mae_xgb)/vanilla_mae_xgb:.1f}%")
-    print(f"Best XGBoost params: {best_params_xgb}")
+    logger.info(f"\nXGBoost: Vanilla MAE = {vanilla_mae_xgb:.4f}, Optuna Best MAE = {best_mae_xgb:.4f}, Improvement = {100*(vanilla_mae_xgb-best_mae_xgb)/vanilla_mae_xgb:.1f}%")
+    logger.info(f"Best XGBoost params: {best_params_xgb}")
     best_params_dict['XGBoost'] = {'vanilla_mae': vanilla_mae_xgb, 'best_mae': best_mae_xgb, 'best_params': best_params_xgb}
 
     # LightGBM
     vanilla_mae_lgb = get_vanilla_mae(lgb.LGBMRegressor, X_train, X_test, y_train, y_test)
     best_mae_lgb, best_params_lgb = run_optuna_sweep('LightGBM', objective_lgb, X_train, X_test, y_train, y_test)
-    print(f"\nLightGBM: Vanilla MAE = {vanilla_mae_lgb:.4f}, Optuna Best MAE = {best_mae_lgb:.4f}, Improvement = {100*(vanilla_mae_lgb-best_mae_lgb)/vanilla_mae_lgb:.1f}%")
-    print(f"Best LightGBM params: {best_params_lgb}")
+    logger.info(f"\nLightGBM: Vanilla MAE = {vanilla_mae_lgb:.4f}, Optuna Best MAE = {best_mae_lgb:.4f}, Improvement = {100*(vanilla_mae_lgb-best_mae_lgb)/vanilla_mae_lgb:.1f}%")
+    logger.info(f"Best LightGBM params: {best_params_lgb}")
     best_params_dict['LightGBM'] = {'vanilla_mae': vanilla_mae_lgb, 'best_mae': best_mae_lgb, 'best_params': best_params_lgb}
 
     # Random Forest
     vanilla_mae_rf = get_vanilla_mae(RandomForestRegressor, X_train, X_test, y_train, y_test)
     best_mae_rf, best_params_rf = run_optuna_sweep('Random Forest', objective_rf, X_train, X_test, y_train, y_test)
-    print(f"\nRandom Forest: Vanilla MAE = {vanilla_mae_rf:.4f}, Optuna Best MAE = {best_mae_rf:.4f}, Improvement = {100*(vanilla_mae_rf-best_mae_rf)/vanilla_mae_rf:.1f}%")
-    print(f"Best Random Forest params: {best_params_rf}")
+    logger.info(f"\nRandom Forest: Vanilla MAE = {vanilla_mae_rf:.4f}, Optuna Best MAE = {best_mae_rf:.4f}, Improvement = {100*(vanilla_mae_rf-best_mae_rf)/vanilla_mae_rf:.1f}%")
+    logger.info(f"Best Random Forest params: {best_params_rf}")
     best_params_dict['RandomForest'] = {'vanilla_mae': vanilla_mae_rf, 'best_mae': best_mae_rf, 'best_params': best_params_rf}
 
     # Bayesian Ridge
     vanilla_mae_bayes = get_vanilla_mae(BayesianRidge, X_train, X_test, y_train, y_test)
     best_mae_bayes, best_params_bayes = run_optuna_sweep('Bayesian Ridge', objective_bayes, X_train, X_test, y_train, y_test)
-    print(f"\nBayesian Ridge: Vanilla MAE = {vanilla_mae_bayes:.4f}, Optuna Best MAE = {best_mae_bayes:.4f}, Improvement = {100*(vanilla_mae_bayes-best_mae_bayes)/vanilla_mae_bayes:.1f}%")
-    print(f"Best Bayesian Ridge params: {best_params_bayes}")
+    logger.info(f"\nBayesian Ridge: Vanilla MAE = {vanilla_mae_bayes:.4f}, Optuna Best MAE = {best_mae_bayes:.4f}, Improvement = {100*(vanilla_mae_bayes-best_mae_bayes)/vanilla_mae_bayes:.1f}%")
+    logger.info(f"Best Bayesian Ridge params: {best_params_bayes}")
     best_params_dict['BayesianRidge'] = {'vanilla_mae': vanilla_mae_bayes, 'best_mae': best_mae_bayes, 'best_params': best_params_bayes}
 
     # Neural Network
     best_mae_nn, best_params_nn = run_optuna_sweep('Neural Network', objective_nn, X_train, X_test, y_train, y_test)
-    print(f"\nNeural Network: Optuna Best MAE = {best_mae_nn:.4f}")
-    print(f"Best Neural Network params: {best_params_nn}")
+    logger.info(f"\nNeural Network: Optuna Best MAE = {best_mae_nn:.4f}")
+    logger.info(f"Best Neural Network params: {best_params_nn}")
     best_params_dict['NeuralNetwork'] = {'best_mae': best_mae_nn, 'best_params': best_params_nn}
 
     # Save all best params to JSON
     with open('optuna_best_params.json', 'w') as f:
         json.dump(best_params_dict, f, indent=2)
-    print("\nBest parameters for all models saved to optuna_best_params.json")
+    logger.info("\nBest parameters for all models saved to optuna_best_params.json")
 
 if __name__ == "__main__":
     main() 

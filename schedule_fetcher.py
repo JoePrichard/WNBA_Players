@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import json
 from datetime import datetime, date, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 import logging
 import re
 import time

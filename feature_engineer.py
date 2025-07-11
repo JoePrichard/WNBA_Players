@@ -13,7 +13,7 @@ MAJOR ISSUES FIXED:
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 import logging
 from dataclasses import asdict
 
@@ -49,7 +49,7 @@ class WNBAFeatureEngineer:
         config: Optional[PredictionConfig] = None,
         lookback_games: int = 5,
         min_games_for_stats: int = 3
-    ):
+    ) -> None:
         """Initialize feature engineer with proper target variable handling."""
         self.config = config or PredictionConfig()
         self.lookback_games = lookback_games
@@ -90,9 +90,11 @@ class WNBAFeatureEngineer:
 
         # Filter out non-player rows (e.g., 'Reserves', empty, or header rows)
         if 'Player' in df.columns:
-            df = df[~df['Player'].str.lower().isin(['reserves', '', 'mp', None])]
+            player_col = df['Player']
+            df = df[~player_col.str.lower().isin(['reserves', '', 'mp', None])]
         if 'player' in df.columns:
-            df = df[~df['player'].str.lower().isin(['reserves', '', 'mp', None])]
+            player_col = df['player']
+            df = df[~player_col.str.lower().isin(['reserves', '', 'mp', None])]
 
         # Ensure 'float_minutes' is always present
         if 'float_minutes' not in df.columns and 'MP' in df.columns:
@@ -131,8 +133,15 @@ class WNBAFeatureEngineer:
             '+/-': 'plus_minus',
         }
         df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
-        print("\n[DEBUG] After renaming, columns:", df.columns.tolist())
-        print(df[df['player'].str.lower() == 'paige bueckers'][['player', 'minutes']])
+
+        # Define required columns for validation
+        required_columns = [
+            'player', 'team', 'date', 'opponent', 'home_away',
+            'minutes', 'points', 'fg_made', 'fg_attempted', 'fg_pct',
+            'fg3_made', 'fg3_attempted', 'fg3_pct', 'ft_made', 'ft_attempted', 'ft_pct',
+            'off_rebounds', 'def_rebounds', 'total_rebounds', 'assists', 'steals', 'blocks',
+            'turnovers', 'fouls', 'plus_minus'
+        ]
 
         # After renaming, ensure 'minutes' column exists
         if 'minutes' not in df.columns:
@@ -142,77 +151,21 @@ class WNBAFeatureEngineer:
             else:
                 raise WNBADataError("No 'minutes' or 'MP' column found after processing. Please check your input data.")
 
-        # DEBUG: Print unique 'minutes' values before conversion
-        if 'minutes' in df.columns:
-            print("\n[DEBUG] Unique 'minutes' values before conversion:", df['minutes'].unique())
-
         # Convert 'minutes' from MM:SS string to float (total minutes)
         if 'minutes' in df.columns:
-            def mmss_to_float(val):
-                try:
-                    if pd.isnull(val):
-                        return np.nan
-                    if isinstance(val, (int, float)):
-                        return float(val)
-                    val_str = str(val)
-                    if val_str.count(':') == 1:
-                        parts = val_str.split(':')
-                        if parts[0].isdigit() and parts[1].isdigit():
-                            return int(parts[0]) + int(parts[1]) / 60.0
-                        else:
-                            return np.nan
-                    # If it's a string but not MM:SS, try to cast to float
-                    return float(val_str) if val_str.replace('.', '', 1).isdigit() else np.nan
-                except Exception:
-                    return np.nan
             df['minutes'] = df['minutes'].apply(mmss_to_float)
-            print("\n[DEBUG] Unique 'minutes' values after conversion:", df['minutes'].unique())
 
-        # DEBUG: Print Paige Bueckers' raw minutes before any conversion
-        paige_raw = df[df['player'].str.lower() == 'paige bueckers'.lower()]
-        if not paige_raw.empty:
-            print("\n[DEBUG] Paige Bueckers raw minutes before any conversion:")
-            print(paige_raw[['player', 'minutes']])
-        else:
-            print("\n[DEBUG] Paige Bueckers is missing from raw data before minutes conversion!")
-
-        # --- DEBUG PRINTS ---
-        print("\n[DEBUG] Columns after renaming:")
-        print(df.columns.tolist())
-        print("\n[DEBUG] DataFrame head after renaming:")
-        print(df.head())
-        required_columns = [
-            'player', 'team', 'date', 'opponent', 'home_away',
-            'minutes', 'points', 'fg_made', 'fg_attempted', 'fg_pct',
-            'fg3_made', 'fg3_attempted', 'fg3_pct', 'ft_made', 'ft_attempted', 'ft_pct',
-            'off_rebounds', 'def_rebounds', 'total_rebounds', 'assists', 'steals', 'blocks',
-            'turnovers', 'fouls', 'plus_minus'
-        ]
-        print("\n[DEBUG] NaN counts in required columns after renaming:")
-        print(df[required_columns].isna().sum())
-
-        # Fill NaNs in percentage columns with 0.0 (these are not essential for row validity)
-        for pct_col in ['fg_pct', 'fg3_pct', 'ft_pct']:
-            if pct_col in df.columns:
-                s = pd.to_numeric(df[pct_col], errors='coerce')
-                df[pct_col] = s if isinstance(s, pd.Series) else df[pct_col]
-                try:
-                    df[pct_col] = df[pct_col].fillna(0.0)
-                except AttributeError:
-                    pass
-
-        # Only drop rows with missing values in truly essential columns
-        essential_columns = ['player', 'team', 'date', 'opponent', 'home_away', 'minutes', 'points']
+        # Remove rows with missing key stats
         initial_rows = len(df)
-        df = df.dropna(subset=essential_columns)
+        df = df.dropna(subset=['points', 'minutes'])
         final_rows = len(df)
         if final_rows < initial_rows:
-            self.logger.warning(f"Removed {initial_rows - final_rows} rows with missing key stats (essentials only)")
+            self.logger.warning(f"Removed {initial_rows - final_rows} rows with missing key stats")
         if df.empty:
             raise WNBADataError("No valid rows remaining after cleaning")
         
         # Strict team validation
-        def _raise_unknown_team(team, colname):
+        def _raise_unknown_team(team: str, colname: str) -> None:
             raise ValueError(f"Unknown {colname}: {team}. Only real teams from team_mapping.py are allowed.")
         if 'team' in df.columns:
             df['team'] = df['team'].apply(lambda t: TeamNameMapper.to_abbreviation(t) if TeamNameMapper.to_abbreviation(t) else _raise_unknown_team(t, 'team'))
@@ -221,7 +174,7 @@ class WNBAFeatureEngineer:
         
         # Ensure total_rebounds is present if off_rebounds and def_rebounds are available
         if 'total_rebounds' not in df.columns and 'off_rebounds' in df.columns and 'def_rebounds' in df.columns:
-            df['total_rebounds'] = df['off_rebounds'] + df['def_rebounds']
+            df['total_rebounds'] = (df['off_rebounds'].fillna(0.0) + df['def_rebounds'].fillna(0.0)).astype(float)
         
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
@@ -618,7 +571,11 @@ class WNBAFeatureEngineer:
         
         # Team context features - simplified to avoid merge issues
         df['feature_team_avg_minutes'] = df.groupby(['team', 'date'])['float_minutes'].transform('mean')
-        df['feature_team_usage_spread'] = df.groupby(['team', 'date'])['feature_usage_rate'].transform('std').fillna(0.05)
+        usage_spread = df.groupby(['team', 'date'])['feature_usage_rate'].transform('std')
+        if isinstance(usage_spread, pd.Series):
+            df['feature_team_usage_spread'] = usage_spread.fillna(0.05)
+        else:
+            df['feature_team_usage_spread'] = pd.Series([0.05] * len(df), index=df.index)
         
         # Player role indicators (using lagged stats to avoid leakage)
         scorer_base = pd.Series(0.0, index=df.index)
@@ -626,6 +583,8 @@ class WNBAFeatureEngineer:
             scorer_col = df['feature_season_avg_points']
             if isinstance(scorer_col, pd.Series):
                 scorer_base = scorer_col.fillna(0)
+            else:
+                scorer_base = pd.Series(scorer_col, index=df.index)
         df['feature_primary_scorer'] = (scorer_base > df['feature_team_avg_minutes'] * 0.6).astype(int)
         
         return df
@@ -734,14 +693,6 @@ class WNBAFeatureEngineer:
             self.logger.info(f"   - {len(target_columns)} target columns: {target_columns}")
             self.logger.info(f"   - CRITICAL: Target variables are EXCLUDED from features")
 
-            # DEBUG: Print Paige Bueckers' row to check inclusion and team mapping
-            paige = df[df['player'].str.lower() == 'paige bueckers'.lower()]
-            if not paige.empty:
-                print("\n[DEBUG] Paige Bueckers row(s) after feature engineering:")
-                print(paige[['player', 'team', 'minutes', 'date']])
-            else:
-                print("\n[DEBUG] Paige Bueckers is missing from features after engineering!")
-
             return df
             
         except Exception as e:
@@ -775,7 +726,7 @@ class WNBAFeatureEngineer:
         return feature_groups
 
 
-def main():
+def main() -> None:
     """Example usage of the fixed feature engineer."""
     print("🏀 WNBA Feature Engineer - FIXED DATA LEAKAGE VERSION")
     print("=" * 60)

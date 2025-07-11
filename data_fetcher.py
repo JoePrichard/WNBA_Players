@@ -20,7 +20,7 @@ import re
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Dict, Tuple
 
 import pandas as pd
 import requests
@@ -209,7 +209,8 @@ class BasketballReference:
 ###############################################################################
 
 def scrape(start: str, end: str, *, delay: float = 2.0, debug: bool = False) -> pd.DataFrame:
-    start_d, end_d = date.fromisoformat(start), date.fromisoformat(end)
+    start_d: date = date.fromisoformat(start)
+    end_d: date = date.fromisoformat(end)
     rm = RequestManager(rate_limit=delay, debug=debug)
     br = BasketballReference(rm)
 

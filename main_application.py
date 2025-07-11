@@ -88,7 +88,7 @@ class DataManager:
     - File management and persistence
     """
     
-    def __init__(self, data_dir: str = "wnba_game_data"):
+    def __init__(self, data_dir: str = "wnba_game_data") -> None:
         """
         Initialize data manager.
         
@@ -280,7 +280,7 @@ class DataManager:
             # Clean and validate data
             df = self._clean_game_logs(df)
             
-            self.logger.info(f"✅ Loaded {len(df)} records for {df.get('player', df.iloc[:, 0]).nunique()} entities")
+            self.logger.info(f"✅ Loaded {len(df)} records for {df['player'].nunique() if 'player' in df.columns else df.iloc[:, 0].nunique()} entities")
             
             return df
             
@@ -382,7 +382,7 @@ class DataManager:
         self.logger.info(f"Data cleaning complete: {len(df)} records")
         return df
     
-    def get_todays_schedule(self) -> Tuple[List[GameSchedule], bool]:
+    def get_todays_schedule(self) -> Tuple[List["GameSchedule"], bool]:
         """
         Get today's real-world schedule.
         Raises WNBADataError if the schedule fetcher is unavailable or
@@ -415,7 +415,7 @@ class DataManager:
             )
         return schedule, True
 
-    def _create_sample_schedule(self, target_date: date) -> List[GameSchedule]:
+    def _create_sample_schedule(self, target_date: date) -> List["GameSchedule"]:
         """Create sample game schedule for testing."""
         self.logger.warning("Creating sample schedule data")
         
@@ -450,7 +450,7 @@ class ModelManager:
     - Model loading and validation
     """
     
-    def __init__(self, config: Optional[PredictionConfig] = None, model_dir: str = "wnba_models"):
+    def __init__(self, config: Any = None, model_dir: str = "wnba_models") -> None:
         """
         Initialize model manager.
         
@@ -607,7 +607,7 @@ class ModelManager:
     
     def is_trained(self) -> bool:
         """Check if models are trained and ready."""
-        return self.prediction_model and self.prediction_model.is_trained
+        return bool(self.prediction_model and getattr(self.prediction_model, 'is_trained', False))
 
 
 class PredictionManager:
@@ -621,7 +621,7 @@ class PredictionManager:
     - Prediction validation
     """
     
-    def __init__(self, output_dir: str = "wnba_predictions"):
+    def __init__(self, output_dir: str = "wnba_predictions") -> None:
         """
         Initialize prediction manager.
         
@@ -634,11 +634,11 @@ class PredictionManager:
         self.logger = logging.getLogger(f"{__name__}.PredictionManager")
     
     def generate_game_predictions(
-        self, 
-        schedule: List[GameSchedule], 
-        model_manager: ModelManager,
-        data_manager: DataManager
-    ) -> List[PlayerPrediction]:
+        self,
+        schedule: List["GameSchedule"],
+        model_manager: "ModelManager",
+        data_manager: "DataManager"
+    ) -> List["PlayerPrediction"]:
         """
         Generate predictions for scheduled games.
         Only real player names and real data are used. No sample/demo predictions.
@@ -655,10 +655,14 @@ class PredictionManager:
             # Load historical data for feature creation
             game_logs_df = data_manager.load_game_logs()
             # Create features
-            features_df = model_manager.prediction_model.feature_engineer.create_all_features(game_logs_df)
+            if model_manager.prediction_model is not None:
+                features_df = model_manager.prediction_model.feature_engineer.create_all_features(game_logs_df)
+            else:
+                self.logger.error("Prediction model is not available in model_manager.")
+                return []
             # Get latest features for each player
             latest_features = (
-                features_df.sort_values('date')
+                features_df.sort_values(by='date')
                 .groupby('player', as_index=False)
                 .tail(1)
             )
@@ -676,11 +680,11 @@ class PredictionManager:
         return predictions
     
     def _predict_game_players(
-        self, 
-        game: GameSchedule, 
-        features_df: pd.DataFrame, 
-        model_manager: ModelManager
-    ) -> List[PlayerPrediction]:
+        self,
+        game: "GameSchedule",
+        features_df: pd.DataFrame,
+        model_manager: "ModelManager"
+    ) -> List["PlayerPrediction"]:
         """Generate predictions for players in a specific game."""
         game_predictions = []
         
@@ -695,13 +699,23 @@ class PredictionManager:
                 continue
             
             # Select top players by minutes played
-            team_players = team_players.assign(float_minutes=team_players['MP'].apply(mmss_to_float))
-            team_players = team_players.sort_values('float_minutes', ascending=False).head(8)
+            if 'float_minutes' not in team_players.columns and 'minutes' in team_players.columns:
+                team_players = team_players.assign(float_minutes=team_players['minutes'])
+            # Ensure float_minutes is numeric and a pandas Series
+            float_minutes = pd.to_numeric(team_players['float_minutes'], errors='coerce')
+            if not isinstance(float_minutes, pd.Series):
+                float_minutes = pd.Series(float_minutes)
+            team_players['float_minutes'] = float_minutes.fillna(0.0)
+            team_players = team_players.sort_values(by='float_minutes', ascending=False).head(8)
             
             for _, player_row in team_players.iterrows():
                 try:
                     # Generate prediction using model
-                    pred = model_manager.prediction_model.predict_player_stats(player_row)
+                    if model_manager.prediction_model is not None:
+                        pred = model_manager.prediction_model.predict_player_stats(player_row)
+                    else:
+                        self.logger.warning("Prediction model is not available in model_manager.")
+                        continue
                     
                     # Create final prediction object
                     player_prediction = PlayerPrediction(
@@ -717,7 +731,7 @@ class PredictionManager:
                         rebounds_uncertainty=round(pred.rebounds_uncertainty, 1),
                         assists_uncertainty=round(pred.assists_uncertainty, 1),
                         confidence_score=round(pred.confidence_score, 2),
-                        model_version=model_manager.prediction_model.model_version
+                        model_version=model_manager.prediction_model.model_version if model_manager.prediction_model is not None else "unknown"
                     )
                     
                     game_predictions.append(player_prediction)
@@ -729,8 +743,8 @@ class PredictionManager:
         return game_predictions
     
     def export_predictions(
-        self, 
-        predictions: List[PlayerPrediction], 
+        self,
+        predictions: List["PlayerPrediction"],
         is_real_data: bool = True,
         target_date: Optional[date] = None
     ) -> str:
@@ -784,7 +798,7 @@ class WNBADailyPredictor:
     and prediction generation to provide a complete prediction pipeline.
     """
     
-    def __init__(self, config: Optional[PredictionConfig] = None):
+    def __init__(self, config: Any = None) -> None:
         """
         Initialize the daily predictor.
         
@@ -946,7 +960,7 @@ class WNBADailyPredictor:
         return results
 
 
-def main():
+def main() -> None:
     """Main function with enhanced command-line interface."""
     parser = argparse.ArgumentParser(
         description="Enhanced WNBA Daily Game Prediction System",

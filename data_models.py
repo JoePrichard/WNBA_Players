@@ -841,13 +841,8 @@ if __name__ == "__main__":
     """
     Demo usage of the data models.
     """
-    print("🏀 WNBA Data Models - Demo")
-    print("=" * 30)
-    
     # Create sample configuration
     config = PredictionConfig()
-    print(f"✅ Configuration created with {len(config.target_stats)} target stats")
-    
     # Create sample game schedule
     schedule = GameSchedule(
         game_id="20250617_NY_LAS",
@@ -856,8 +851,6 @@ if __name__ == "__main__":
         away_team="NY", 
         game_time="7:00 PM PT"
     )
-    print(f"✅ Game schedule: {schedule.away_team} @ {schedule.home_team}")
-    
     # Create sample prediction
     prediction = PlayerPrediction(
         game_id=schedule.game_id,
@@ -873,9 +866,3 @@ if __name__ == "__main__":
         assists_uncertainty=1.2,
         confidence_score=0.85
     )
-    
-    print(f"✅ Prediction for {prediction.player}:")
-    print(f"   Points: {prediction.predicted_points:.1f} ± {prediction.points_uncertainty:.1f}")
-    print(f"   Confidence: {prediction.confidence_score:.1%}")
-    
-    print("\n🎉 Data models working correctly!")
