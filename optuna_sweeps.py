@@ -22,10 +22,12 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 # --- CONFIGURABLE ---
-STAT_TO_PREDICT = 'points'  # Change to 'assists', 'total_rebounds', etc. as needed
+STATS_TO_PREDICT = ['points', 'total_rebounds', 'assists']  # Default stats to optimize
 CSV_FILENAME = None  # Set to a specific CSV filename in wnba_game_data/ or leave as None to auto-detect latest
 N_TRIALS = 50
 RANDOM_STATE = 42
+
+import argparse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("optuna_sweeps")
@@ -252,57 +254,67 @@ def get_vanilla_mae(
         model.fit(X_train_scaled, y_train)
         y_pred = model.predict(X_test_scaled)
         return mean_absolute_error(y_test, y_pred)
-    else:
+    elif model_cls == RandomForestRegressor:
         model = model_cls(n_estimators=100, max_depth=8, random_state=RANDOM_STATE, n_jobs=-1)
+    else:
+        model = model_cls()
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
     return mean_absolute_error(y_test, y_pred)
 
 # --- MAIN SCRIPT ---
 def main() -> None:
-    df, feature_columns = load_and_engineer_data()
-    X_train, X_test, y_train, y_test = get_train_test(df, feature_columns, STAT_TO_PREDICT)
+    parser = argparse.ArgumentParser(description="Optuna hyperparameter sweeps for WNBA models.")
+    parser.add_argument('--stat', type=str, default=None, help='Stat to optimize (points, total_rebounds, assists). If not set, runs all.')
+    args = parser.parse_args()
 
+    stats_to_run = [args.stat] if args.stat else STATS_TO_PREDICT
     best_params_dict = {}
 
-    # XGBoost
-    vanilla_mae_xgb = get_vanilla_mae(xgb.XGBRegressor, X_train, X_test, y_train, y_test)
-    best_mae_xgb, best_params_xgb = run_optuna_sweep('XGBoost', objective_xgb, X_train, X_test, y_train, y_test)
-    logger.info(f"\nXGBoost: Vanilla MAE = {vanilla_mae_xgb:.4f}, Optuna Best MAE = {best_mae_xgb:.4f}, Improvement = {100*(vanilla_mae_xgb-best_mae_xgb)/vanilla_mae_xgb:.1f}%")
-    logger.info(f"Best XGBoost params: {best_params_xgb}")
-    best_params_dict['XGBoost'] = {'vanilla_mae': vanilla_mae_xgb, 'best_mae': best_mae_xgb, 'best_params': best_params_xgb}
+    for stat in stats_to_run:
+        logger.info(f"\n=== Optimizing for stat: {stat} ===")
+        df, feature_columns = load_and_engineer_data()
+        X_train, X_test, y_train, y_test = get_train_test(df, feature_columns, stat)
+        best_params_dict[stat] = {}
 
-    # LightGBM
-    vanilla_mae_lgb = get_vanilla_mae(lgb.LGBMRegressor, X_train, X_test, y_train, y_test)
-    best_mae_lgb, best_params_lgb = run_optuna_sweep('LightGBM', objective_lgb, X_train, X_test, y_train, y_test)
-    logger.info(f"\nLightGBM: Vanilla MAE = {vanilla_mae_lgb:.4f}, Optuna Best MAE = {best_mae_lgb:.4f}, Improvement = {100*(vanilla_mae_lgb-best_mae_lgb)/vanilla_mae_lgb:.1f}%")
-    logger.info(f"Best LightGBM params: {best_params_lgb}")
-    best_params_dict['LightGBM'] = {'vanilla_mae': vanilla_mae_lgb, 'best_mae': best_mae_lgb, 'best_params': best_params_lgb}
+        # XGBoost
+        vanilla_mae_xgb = get_vanilla_mae(xgb.XGBRegressor, X_train, X_test, y_train, y_test)
+        best_mae_xgb, best_params_xgb = run_optuna_sweep('XGBoost', objective_xgb, X_train, X_test, y_train, y_test)
+        logger.info(f"\nXGBoost: Vanilla MAE = {vanilla_mae_xgb:.4f}, Optuna Best MAE = {best_mae_xgb:.4f}, Improvement = {100*(vanilla_mae_xgb-best_mae_xgb)/vanilla_mae_xgb:.1f}%")
+        logger.info(f"Best XGBoost params: {best_params_xgb}")
+        best_params_dict[stat]['XGBoost'] = {'vanilla_mae': vanilla_mae_xgb, 'best_mae': best_mae_xgb, 'best_params': best_params_xgb}
 
-    # Random Forest
-    vanilla_mae_rf = get_vanilla_mae(RandomForestRegressor, X_train, X_test, y_train, y_test)
-    best_mae_rf, best_params_rf = run_optuna_sweep('Random Forest', objective_rf, X_train, X_test, y_train, y_test)
-    logger.info(f"\nRandom Forest: Vanilla MAE = {vanilla_mae_rf:.4f}, Optuna Best MAE = {best_mae_rf:.4f}, Improvement = {100*(vanilla_mae_rf-best_mae_rf)/vanilla_mae_rf:.1f}%")
-    logger.info(f"Best Random Forest params: {best_params_rf}")
-    best_params_dict['RandomForest'] = {'vanilla_mae': vanilla_mae_rf, 'best_mae': best_mae_rf, 'best_params': best_params_rf}
+        # LightGBM
+        vanilla_mae_lgb = get_vanilla_mae(lgb.LGBMRegressor, X_train, X_test, y_train, y_test)
+        best_mae_lgb, best_params_lgb = run_optuna_sweep('LightGBM', objective_lgb, X_train, X_test, y_train, y_test)
+        logger.info(f"\nLightGBM: Vanilla MAE = {vanilla_mae_lgb:.4f}, Optuna Best MAE = {best_mae_lgb:.4f}, Improvement = {100*(vanilla_mae_lgb-best_mae_lgb)/vanilla_mae_lgb:.1f}%")
+        logger.info(f"Best LightGBM params: {best_params_lgb}")
+        best_params_dict[stat]['LightGBM'] = {'vanilla_mae': vanilla_mae_lgb, 'best_mae': best_mae_lgb, 'best_params': best_params_lgb}
 
-    # Bayesian Ridge
-    vanilla_mae_bayes = get_vanilla_mae(BayesianRidge, X_train, X_test, y_train, y_test)
-    best_mae_bayes, best_params_bayes = run_optuna_sweep('Bayesian Ridge', objective_bayes, X_train, X_test, y_train, y_test)
-    logger.info(f"\nBayesian Ridge: Vanilla MAE = {vanilla_mae_bayes:.4f}, Optuna Best MAE = {best_mae_bayes:.4f}, Improvement = {100*(vanilla_mae_bayes-best_mae_bayes)/vanilla_mae_bayes:.1f}%")
-    logger.info(f"Best Bayesian Ridge params: {best_params_bayes}")
-    best_params_dict['BayesianRidge'] = {'vanilla_mae': vanilla_mae_bayes, 'best_mae': best_mae_bayes, 'best_params': best_params_bayes}
+        # Random Forest
+        vanilla_mae_rf = get_vanilla_mae(RandomForestRegressor, X_train, X_test, y_train, y_test)
+        best_mae_rf, best_params_rf = run_optuna_sweep('Random Forest', objective_rf, X_train, X_test, y_train, y_test)
+        logger.info(f"\nRandom Forest: Vanilla MAE = {vanilla_mae_rf:.4f}, Optuna Best MAE = {best_mae_rf:.4f}, Improvement = {100*(vanilla_mae_rf-best_mae_rf)/vanilla_mae_rf:.1f}%")
+        logger.info(f"Best Random Forest params: {best_params_rf}")
+        best_params_dict[stat]['RandomForest'] = {'vanilla_mae': vanilla_mae_rf, 'best_mae': best_mae_rf, 'best_params': best_params_rf}
 
-    # Neural Network
-    best_mae_nn, best_params_nn = run_optuna_sweep('Neural Network', objective_nn, X_train, X_test, y_train, y_test)
-    logger.info(f"\nNeural Network: Optuna Best MAE = {best_mae_nn:.4f}")
-    logger.info(f"Best Neural Network params: {best_params_nn}")
-    best_params_dict['NeuralNetwork'] = {'best_mae': best_mae_nn, 'best_params': best_params_nn}
+        # Bayesian Ridge
+        vanilla_mae_bayes = get_vanilla_mae(BayesianRidge, X_train, X_test, y_train, y_test)
+        best_mae_bayes, best_params_bayes = run_optuna_sweep('Bayesian Ridge', objective_bayes, X_train, X_test, y_train, y_test)
+        logger.info(f"\nBayesian Ridge: Vanilla MAE = {vanilla_mae_bayes:.4f}, Optuna Best MAE = {best_mae_bayes:.4f}, Improvement = {100*(vanilla_mae_bayes-best_mae_bayes)/vanilla_mae_bayes:.1f}%")
+        logger.info(f"Best Bayesian Ridge params: {best_params_bayes}")
+        best_params_dict[stat]['BayesianRidge'] = {'vanilla_mae': vanilla_mae_bayes, 'best_mae': best_mae_bayes, 'best_params': best_params_bayes}
+
+        # Neural Network
+        best_mae_nn, best_params_nn = run_optuna_sweep('Neural Network', objective_nn, X_train, X_test, y_train, y_test)
+        logger.info(f"\nNeural Network: Optuna Best MAE = {best_mae_nn:.4f}")
+        logger.info(f"Best Neural Network params: {best_params_nn}")
+        best_params_dict[stat]['NeuralNetwork'] = {'best_mae': best_mae_nn, 'best_params': best_params_nn}
 
     # Save all best params to JSON
     with open('optuna_best_params.json', 'w') as f:
         json.dump(best_params_dict, f, indent=2)
-    logger.info("\nBest parameters for all models saved to optuna_best_params.json")
+    logger.info("\nBest parameters for all models and stats saved to optuna_best_params.json")
 
 if __name__ == "__main__":
     main() 

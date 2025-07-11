@@ -135,8 +135,7 @@ class StatsNeuralNetwork(nn.Module):
         
         mean_pred = np.mean(predictions)
         uncertainty = np.std(predictions)
-        
-        return mean_pred, uncertainty
+        return float(mean_pred), float(uncertainty)
 
 
 class WNBAPredictionModel:
@@ -219,12 +218,15 @@ class WNBAPredictionModel:
             min_games = self.config.min_games_for_prediction
             player_counts = features_df.groupby('player').size()
             valid_players = player_counts[player_counts >= min_games].index
-            
+            if not isinstance(valid_players, pd.Index):
+                valid_players = pd.Index(valid_players)
             if len(valid_players) == 0:
                 raise WNBAModelError(f"No players with at least {min_games} games")
-            
             # Filter to valid players and reset index for safe splitting
-            features_df = features_df[features_df['player'].isin(valid_players)].reset_index(drop=True)
+            features_df = features_df[features_df['player'].isin(valid_players)]
+            if not isinstance(features_df, pd.DataFrame):
+                features_df = pd.DataFrame(features_df)
+            features_df = features_df.reset_index(drop=True)
             
             self.logger.info(f"Data prepared: {len(features_df)} games for {len(valid_players)} players")
             self.logger.info(f"Features: {len(self.feature_columns)} columns")
@@ -250,9 +252,10 @@ class WNBAPredictionModel:
             test_idx.extend(idx[-holdout_games:])
         return np.array(train_idx), np.array(test_idx)
 
-    def _create_base_models(self) -> Dict[str, Any]:
+    def _create_base_models(self, stat_name: str = None) -> Dict[str, Any]:
         """
-        Create base models for ensemble using hyperparameters from config.models.
+        Create base models for ensemble using hyperparameters from config.models or Optuna best params.
+        If stat_name is provided, use stat-specific Optuna parameters if available.
         Returns:
             Dictionary of model instances
         """
@@ -281,29 +284,33 @@ class WNBAPredictionModel:
         def filter_params(params, allowed_keys):
             return {k: v for k, v in params.items() if k in allowed_keys}
 
-        # Helper to get params: prefer optuna, then config, then fallback
+        # Helper to get params: prefer stat-specific optuna, then global optuna, then config, then fallback
         def get_params(model_name, config_dict, optuna_key=None, allowed_keys=None):
-            if optuna_params and optuna_key and optuna_key in optuna_params:
+            params = None
+            # Try stat-specific Optuna params
+            if optuna_params and stat_name and stat_name in optuna_params and optuna_key and optuna_key in optuna_params[stat_name]:
+                params = copy.deepcopy(optuna_params[stat_name][optuna_key]["best_params"])
+            # Fallback to global Optuna params (legacy)
+            elif optuna_params and optuna_key and optuna_key in optuna_params:
                 params = copy.deepcopy(optuna_params[optuna_key]["best_params"])
-                # Add required defaults if missing
-                if model_name == "xgboost":
-                    params.setdefault("random_state", 42)
-                    params.setdefault("verbosity", 0)
-                elif model_name == "lightgbm":
-                    params.setdefault("random_state", 42)
-                    params.setdefault("verbosity", -1)
-                elif model_name == "random_forest":
-                    params.setdefault("random_state", 42)
-                    params.setdefault("n_jobs", -1)
-                if allowed_keys:
-                    params = filter_params(params, allowed_keys)
-                return params
+            # Fallback to config
             elif config_dict:
-                if allowed_keys:
-                    return filter_params(config_dict, allowed_keys)
-                return config_dict
+                params = config_dict
             else:
-                return {}
+                params = {}
+            # Add required defaults if missing
+            if model_name == "xgboost":
+                params.setdefault("random_state", 42)
+                params.setdefault("verbosity", 0)
+            elif model_name == "lightgbm":
+                params.setdefault("random_state", 42)
+                params.setdefault("verbosity", -1)
+            elif model_name == "random_forest":
+                params.setdefault("random_state", 42)
+                params.setdefault("n_jobs", -1)
+            if allowed_keys:
+                params = filter_params(params, allowed_keys)
+            return params
 
         xgb_allowed = {"n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "random_state", "verbosity"}
         lgb_allowed = {"n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "random_state", "verbosity"}
@@ -317,13 +324,13 @@ class WNBAPredictionModel:
         def get_bayes_params():
             params = get_params("bayesian_ridge", {}, "BayesianRidge", bayes_allowed)
             # Only keep the four float params and ensure no extra keys
-            filtered = {k: float(params[k]) for k in bayes_allowed if k in params}
+            filtered = {k: float(params[k]) for k in bayes_allowed if k in params and params[k] is not None}
             # Fill missing with defaults
             for k in bayes_allowed:
                 if k not in filtered:
                     filtered[k] = 1e-6
             # Remove any extra keys
-            filtered = {k: filtered[k] for k in bayes_allowed}
+            filtered = {k: float(filtered[k]) for k in bayes_allowed}
             return filtered
 
         bayes_params = get_bayes_params()
@@ -376,7 +383,7 @@ class WNBAPredictionModel:
         self.scalers[stat_name] = scaler
         
         # Train models
-        base_models = self._create_base_models()
+        base_models = self._create_base_models(stat_name=stat_name)
         trained_models = {}
         metrics = {}
         

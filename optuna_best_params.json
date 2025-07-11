@@ -1,54 +1,164 @@
 {
-  "XGBoost": {
-    "vanilla_mae": 3.476361036300659,
-    "best_mae": 3.387040853500366,
-    "best_params": {
-      "n_estimators": 150,
-      "max_depth": 4,
-      "learning_rate": 0.0351075420630103,
-      "subsample": 0.951800318355228,
-      "colsample_bytree": 0.8991597786040065
+  "points": {
+    "XGBoost": {
+      "vanilla_mae": 3.578831434249878,
+      "best_mae": 3.425380229949951,
+      "best_params": {
+        "n_estimators": 216,
+        "max_depth": 5,
+        "learning_rate": 0.0255843372965223,
+        "subsample": 0.9842117279022519,
+        "colsample_bytree": 0.9830872278793041
+      }
+    },
+    "LightGBM": {
+      "vanilla_mae": 3.4555390467021843,
+      "best_mae": 3.3784441089809776,
+      "best_params": {
+        "n_estimators": 202,
+        "max_depth": 4,
+        "learning_rate": 0.02886496196573106,
+        "subsample": 0.9795542149013333,
+        "colsample_bytree": 0.9862528132298237
+      }
+    },
+    "RandomForest": {
+      "vanilla_mae": 3.445774187273277,
+      "best_mae": 3.4041921816105742,
+      "best_params": {
+        "n_estimators": 207,
+        "max_depth": 8,
+        "min_samples_split": 3,
+        "min_samples_leaf": 5
+      }
+    },
+    "BayesianRidge": {
+      "vanilla_mae": 4.009001673829422,
+      "best_mae": 4.009001668406925,
+      "best_params": {
+        "alpha_1": 3.3916550683418415e-06,
+        "alpha_2": 1.1740358692291371e-06,
+        "lambda_1": 9.754812650708026e-06,
+        "lambda_2": 2.511893798360567e-07
+      }
+    },
+    "NeuralNetwork": {
+      "best_mae": 3.861758232116699,
+      "best_params": {
+        "hidden_dim": 64,
+        "n_layers": 1,
+        "dropout": 0.2660707631417964,
+        "lr": 0.0005314019066886719,
+        "batch_size": 16
+      }
     }
   },
-  "LightGBM": {
-    "vanilla_mae": 3.4311655025255408,
-    "best_mae": 3.367617634692798,
-    "best_params": {
-      "n_estimators": 202,
-      "max_depth": 4,
-      "learning_rate": 0.02886496196573106,
-      "subsample": 0.9795542149013333,
-      "colsample_bytree": 0.9862528132298237
+  "total_rebounds": {
+    "XGBoost": {
+      "vanilla_mae": 0.6720315217971802,
+      "best_mae": 0.6556428074836731,
+      "best_params": {
+        "n_estimators": 214,
+        "max_depth": 5,
+        "learning_rate": 0.03598877357784404,
+        "subsample": 0.6417774978599735,
+        "colsample_bytree": 0.9423165358668886
+      }
+    },
+    "LightGBM": {
+      "vanilla_mae": 0.668745763264973,
+      "best_mae": 0.6438465855329776,
+      "best_params": {
+        "n_estimators": 117,
+        "max_depth": 10,
+        "learning_rate": 0.04787953310245228,
+        "subsample": 0.6043956756975085,
+        "colsample_bytree": 0.9561917844439639
+      }
+    },
+    "RandomForest": {
+      "vanilla_mae": 0.6584744853179021,
+      "best_mae": 0.6532322781894392,
+      "best_params": {
+        "n_estimators": 134,
+        "max_depth": 20,
+        "min_samples_split": 6,
+        "min_samples_leaf": 2
+      }
+    },
+    "BayesianRidge": {
+      "vanilla_mae": 1.2626531624188855,
+      "best_mae": 1.2626531589957632,
+      "best_params": {
+        "alpha_1": 1.3742396727633732e-06,
+        "alpha_2": 1.995498989400141e-06,
+        "lambda_1": 2.484559083775964e-07,
+        "lambda_2": 9.973026847681422e-06
+      }
+    },
+    "NeuralNetwork": {
+      "best_mae": 0.9119020104408264,
+      "best_params": {
+        "hidden_dim": 32,
+        "n_layers": 1,
+        "dropout": 0.34289586799513566,
+        "lr": 0.002144226660973477,
+        "batch_size": 64
+      }
     }
   },
-  "RandomForest": {
-    "vanilla_mae": 3.400565188718325,
-    "best_mae": 3.3746445973978845,
-    "best_params": {
-      "n_estimators": 166,
-      "max_depth": 8,
-      "min_samples_split": 8,
-      "min_samples_leaf": 5
-    }
-  },
-  "BayesianRidge": {
-    "vanilla_mae": 3.979369100786596,
-    "best_mae": 3.9793690956746812,
-    "best_params": {
-      "alpha_1": 3.3916550683418415e-06,
-      "alpha_2": 1.1740358692291371e-06,
-      "lambda_1": 9.754812650708026e-06,
-      "lambda_2": 2.511893798360567e-07
-    }
-  },
-  "NeuralNetwork": {
-    "best_mae": 3.855271100997925,
-    "best_params": {
-      "hidden_dim": 64,
-      "n_layers": 1,
-      "dropout": 0.05598063886894272,
-      "lr": 0.0002692260063153993,
-      "batch_size": 32
+  "assists": {
+    "XGBoost": {
+      "vanilla_mae": 0.4082408547401428,
+      "best_mae": 0.40196865797042847,
+      "best_params": {
+        "n_estimators": 183,
+        "max_depth": 7,
+        "learning_rate": 0.11447688681471985,
+        "subsample": 0.9230586265124341,
+        "colsample_bytree": 0.9119323574946135
+      }
+    },
+    "LightGBM": {
+      "vanilla_mae": 0.4076804043914561,
+      "best_mae": 0.4024298354718074,
+      "best_params": {
+        "n_estimators": 108,
+        "max_depth": 6,
+        "learning_rate": 0.06117029576832514,
+        "subsample": 0.9773782511798565,
+        "colsample_bytree": 0.9815425946022119
+      }
+    },
+    "RandomForest": {
+      "vanilla_mae": 0.39680308119682034,
+      "best_mae": 0.38847421047640207,
+      "best_params": {
+        "n_estimators": 84,
+        "max_depth": 16,
+        "min_samples_split": 3,
+        "min_samples_leaf": 2
+      }
+    },
+    "BayesianRidge": {
+      "vanilla_mae": 0.7488177612806527,
+      "best_mae": 0.7488177105639747,
+      "best_params": {
+        "alpha_1": 1.3742396727633732e-06,
+        "alpha_2": 1.995498989400141e-06,
+        "lambda_1": 2.484559083775964e-07,
+        "lambda_2": 9.973026847681422e-06
+      }
+    },
+    "NeuralNetwork": {
+      "best_mae": 0.5309915542602539,
+      "best_params": {
+        "hidden_dim": 128,
+        "n_layers": 2,
+        "dropout": 0.06101911742238941,
+        "lr": 0.0009780337016659412,
+        "batch_size": 32
+      }
     }
   }
 }
