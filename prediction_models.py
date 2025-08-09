@@ -424,7 +424,7 @@ class WNBAPredictionModel:
                     n_predictions=len(y_test)
                 )
                 
-                self.logger.info(f"  {model_name}: R² = {r2:.3f}, MAE = {mae:.3f}")
+                self.logger.info(f"  {model_name}: R² = {r2:.3f}, MAE = {mae:.3f}, Brier = {brier_score:.3f}")
                 
             except Exception as e:
                 self.logger.warning(f"Failed to train {model_name} for {stat_name}: {e}")

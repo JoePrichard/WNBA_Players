@@ -34,7 +34,7 @@ from data_models import (
 )
 from prediction_models import WNBAPredictionModel
 from feature_engineer import WNBAFeatureEngineer
-from utils import mmss_to_float
+from utils import mmss_to_float, brier_score_regression
 
 
 class WNBAModelValidator:
@@ -278,15 +278,15 @@ class WNBAModelValidator:
     def _calculate_prediction_metrics(
         self, 
         predictions_df: pd.DataFrame, 
-        stat: str
+        stat: str,
+        threshold: float = None
     ) -> Dict[str, float]:
         """
         Calculate validation metrics for a specific statistic.
-        
         Args:
             predictions_df: DataFrame with predictions and actuals
             stat: Statistic name
-            
+            threshold: Threshold for Brier score (if None, use median)
         Returns:
             Dictionary of metrics
         """
@@ -320,11 +320,10 @@ class WNBAModelValidator:
             ci_upper = predicted + 1.96 * uncertainty
             coverage_95 = ((actual >= ci_lower) & (actual <= ci_upper)).mean()
             
-            # Calibration (Brier score approximation)
-            median_actual = actual.median()
-            binary_actual = (actual > median_actual).astype(int)
-            binary_prob = (predicted > median_actual).astype(float)
-            brier_score = np.mean((binary_prob - binary_actual) ** 2)
+            # Calibration (Brier score)
+            if threshold is None:
+                threshold = float(actual.median())
+            brier_score = brier_score_regression(actual, predicted, threshold)
             
             # Additional metrics
             mean_uncertainty = uncertainty.mean()
@@ -410,7 +409,29 @@ class WNBAModelValidator:
                 'total_predictions': stat_results['n_predictions'].sum(),
                 'n_periods': len(stat_results)
             }
-            
+
+            # --- Brier scores at custom thresholds ---
+            brier_scores_by_threshold = {}
+            # Only compute if actual and predicted columns exist
+            actual_col = f'actual_{stat}'
+            pred_col = f'predicted_{stat}'
+            if actual_col in stat_results.columns and pred_col in stat_results.columns:
+                actual = stat_results[actual_col].values
+                predicted = stat_results[pred_col].values
+                thresholds = []
+                if stat == 'points':
+                    thresholds = [10, 15, 20]
+                elif stat in ('total_rebounds', 'rebounds'):
+                    thresholds = [5, 10]
+                elif stat == 'assists':
+                    thresholds = [3, 5, 7]
+                # Add median as well
+                thresholds.append(float(np.median(actual)))
+                for thresh in thresholds:
+                    brier_scores_by_threshold[f"{thresh}"] = brier_score_regression(actual, predicted, thresh)
+            summary['brier_scores_by_threshold'] = brier_scores_by_threshold
+            # ---
+
             report['summary'][stat] = summary
             report['detailed_metrics'][stat] = stat_results.to_dict('records')
         

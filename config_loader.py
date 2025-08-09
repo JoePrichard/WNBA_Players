@@ -178,6 +178,7 @@ class DataConfig:
         model_dir (str): Directory for saved models
         validation_dir (str): Directory for validation results
         timeout_seconds (int): HTTP request timeout in seconds
+        train_years (List[int]): List of years to use for training data
     """
     base_url: str = "https://www.basketball-reference.com/wnba"
     rate_limit_delay: float = 2.0
@@ -188,6 +189,7 @@ class DataConfig:
     model_dir: str = "wnba_models"
     validation_dir: str = "wnba_validation"
     timeout_seconds: int = 30
+    train_years: List[int] = field(default_factory=lambda: [datetime.now().year])
     
     def validate(self) -> None:
         """
@@ -213,6 +215,11 @@ class DataConfig:
         
         if self.timeout_seconds <= 0:
             raise WNBAConfigurationError("timeout_seconds must be positive")
+        
+        if not isinstance(self.train_years, list) or not all(isinstance(y, int) for y in self.train_years):
+            raise WNBAConfigurationError("train_years must be a list of integers")
+        if len(self.train_years) == 0:
+            raise WNBAConfigurationError("train_years cannot be empty")
     
     def ensure_directories_exist(self) -> None:
         """Create all configured directories if they don't exist."""
@@ -558,29 +565,38 @@ class ConfigLoader:
     def _update_dataclass_from_dict(obj: Any, update_dict: Dict[str, Any]) -> None:
         """
         Update dataclass object fields from dictionary.
-        
         Args:
             obj (Any): Dataclass object to update
             update_dict (Dict[str, Any]): Dictionary with new values
         """
         type_hints = get_type_hints(type(obj))
-        
         for key, value in update_dict.items():
             if hasattr(obj, key):
-                # Type conversion if needed
                 expected_type = type_hints.get(key)
-                if expected_type and not isinstance(value, expected_type):
-                    try:
-                        if expected_type == float:
-                            value = float(value)
-                        elif expected_type == int:
-                            value = int(value)
-                        elif expected_type == bool:
-                            value = bool(value)
-                    except (ValueError, TypeError):
-                        logging.warning(f"Could not convert {key}={value} to {expected_type}")
-                        continue
-                
+                origin_type = getattr(expected_type, '__origin__', None)
+                if origin_type:
+                    # For generics like List[int], Dict[str, int], etc.
+                    if not isinstance(value, origin_type):
+                        # Try to convert if possible, or skip
+                        if origin_type is list and not isinstance(value, list):
+                            value = list(value) if isinstance(value, (tuple, set)) else value
+                        elif origin_type is dict and not isinstance(value, dict):
+                            value = dict(value) if isinstance(value, (list, tuple)) else value
+                        else:
+                            logging.warning(f"Could not convert {key}={value} to {expected_type}")
+                            continue
+                else:
+                    if expected_type and not isinstance(value, expected_type):
+                        try:
+                            if expected_type == float:
+                                value = float(value)
+                            elif expected_type == int:
+                                value = int(value)
+                            elif expected_type == bool:
+                                value = bool(value)
+                        except (ValueError, TypeError):
+                            logging.warning(f"Could not convert {key}={value} to {expected_type}")
+                            continue
                 setattr(obj, key, value)
     
     @staticmethod
@@ -731,6 +747,9 @@ batch_size = 32
 [data]
 # Base URL for data fetching (Basketball Reference WNBA)
 base_url = "https://www.basketball-reference.com/wnba"
+
+# List of years to use for training (multi-season support)
+train_years = [2021, 2022, 2023, 2024, 2025]
 
 # Rate limiting - seconds between requests (be respectful!)
 rate_limit_delay = 2.0

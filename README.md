@@ -71,6 +71,17 @@ If you want to visualize predictions:
 streamlit run dashboard.py
 ```
 
+## Multi-Season Training
+
+To train models on multiple seasons, specify the years in your config file under the [data] section:
+
+```toml
+[data]
+train_years = [2021, 2022, 2023, 2024]
+```
+
+The pipeline will automatically fetch, load, and train on all specified years.
+
 ## Notes
 - Data and model files are saved in `wnba_game_data/` and `wnba_models/` by default.
 - All outputs (predictions) are saved in `wnba_predictions/`.

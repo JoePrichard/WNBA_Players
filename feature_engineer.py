@@ -16,6 +16,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Union, Any
 import logging
 from dataclasses import asdict
+# Add KMeans import for clustering
+from sklearn.cluster import KMeans
 
 from data_models import (
     PlayerGameLog, TeamGameLog, HomeAway, GameResult,
@@ -448,6 +450,7 @@ class WNBAFeatureEngineer:
     def create_context_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Create game context features - FIXED VERSION.
+        Adds seasonality/league trend features: league-wide average points to date, season progress.
         """
         df = df.copy()
         
@@ -531,14 +534,30 @@ class WNBAFeatureEngineer:
         df['feature_pace_factor'] = df['team_pace'] / 80.0
         df['feature_blowout_risk'] = (np.abs(df['feature_opp_strength']) > 1.5).astype(int)
         
+        # --- Seasonality/League Trend Features ---
+        # League-wide average points per game up to (not including) this date
+        df = df.sort_values(['date'])
+        league_points_cumsum = df['points'].cumsum() - df['points']
+        league_games_cumsum = np.arange(len(df))
+        df['feature_league_avg_points_to_date'] = np.where(
+            league_games_cumsum > 0,
+            league_points_cumsum / league_games_cumsum,
+            df['points'].mean()  # fallback for first row
+        )
+        # Season progress (already present, but ensure it's here)
+        if 'feature_game_number_season' not in df.columns:
+            df['feature_game_number_season'] = df.groupby('player').cumcount() + 1
+        max_games = df.groupby('player')['feature_game_number_season'].transform('max')
+        df['feature_season_progress'] = df['feature_game_number_season'] / max_games
+        # --- End Seasonality/League Trend Features ---
+        
         return df
 
     def create_synergy_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Create team synergy features - FIXED VERSION.
+        Create team synergy features - now includes player clustering (archetype) features.
         """
         df = df.copy()
-        
         # Ensure 'float_minutes' is always present
         if 'float_minutes' not in df.columns and 'MP' in df.columns:
             df['float_minutes'] = df['MP'].apply(mmss_to_float)
@@ -546,11 +565,9 @@ class WNBAFeatureEngineer:
             df['float_minutes'] = 0.0
         # Use 'float_minutes' everywhere minutes as a float are needed
 
-        # Position-based features
+        # Position-based features (existing logic)
         if 'position' not in df.columns:
             df['position'] = self._infer_positions(df)
-        
-        # Position dummy variables
         positions = ['PG', 'SG', 'SF', 'PF', 'C']
         position_weights = {
             'PG': {'ast_weight': 1.5, 'reb_weight': 0.7, 'pts_weight': 1.0},
@@ -559,24 +576,77 @@ class WNBAFeatureEngineer:
             'PF': {'ast_weight': 0.7, 'reb_weight': 1.4, 'pts_weight': 1.0},
             'C': {'ast_weight': 0.5, 'reb_weight': 1.6, 'pts_weight': 0.9}
         }
-        
         for pos in positions:
             df[f'feature_pos_is_{pos}'] = (df['position'] == pos).astype(int)
-            
             if pos in position_weights:
                 weights = position_weights[pos]
                 for stat, weight in weights.items():
                     stat_name = stat.replace('_weight', '')
                     df[f'feature_{pos}_{stat_name}_expectation'] = df[f'feature_pos_is_{pos}'] * weight
-        
-        # Team context features - simplified to avoid merge issues
+
+        # --- Player Clustering (Archetype) Features ---
+        # Use lagged season averages for clustering (to avoid leakage)
+        cluster_features = ['feature_season_avg_points', 'feature_season_avg_assists', 'feature_season_avg_total_rebounds', 'feature_season_avg_blocks']
+        # Only use rows where all cluster features are present
+        cluster_df = df.dropna(subset=cluster_features)
+        # Prepare player-level lagged averages (use last available for each player)
+        player_profiles = (
+            cluster_df.groupby('player')[cluster_features]
+            .last()
+            .fillna(0.0)
+        )
+        # Fit KMeans (n_clusters=5)
+        n_clusters = 5
+        if len(player_profiles) >= n_clusters:
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            player_clusters = kmeans.fit_predict(player_profiles.values)
+            player_cluster_map = dict(zip(player_profiles.index, player_clusters))
+        else:
+            # Not enough players for clustering, assign all to cluster 0
+            player_cluster_map = {p: 0 for p in player_profiles.index}
+        # Assign cluster to each row
+        df['feature_player_cluster'] = df['player'].map(player_cluster_map).fillna(-1).astype(int)
+        # One-hot encode player cluster (optional, can help some models)
+        for c in range(n_clusters):
+            df[f'feature_player_cluster_{c}'] = (df['feature_player_cluster'] == c).astype(int)
+        # For each game, count number of each cluster type among teammates and opponents
+        for c in range(n_clusters):
+            # Teammates (same team, same date, not self)
+            df[f'feature_num_teammate_cluster_{c}'] = df.groupby(['team', 'date'])['feature_player_cluster'].transform(lambda x: (x == c).sum()) - (df['feature_player_cluster'] == c).astype(int)
+            # Opponents (opponent team, same date)
+            df[f'feature_num_opponent_cluster_{c}'] = df.groupby(['opponent', 'date'])['feature_player_cluster'].transform(lambda x: (x == c).sum())
+        # --- End Player Clustering Features ---
+
+        # --- Teammate and Opponent Rolling Average Features ---
+        # Key stats to use
+        rolling_stats = [
+            f'feature_points_l{self.lookback_games}',
+            f'feature_assists_l{self.lookback_games}',
+            f'feature_total_rebounds_l{self.lookback_games}',
+            f'feature_usage_rate',
+            f'feature_scoring_efficiency_l{self.lookback_games}'
+        ]
+        # For each player-game, compute teammate and opponent averages (excluding self for teammates)
+        for stat in rolling_stats:
+            # Teammate average (same team, same date, exclude self)
+            df[f'feature_teammate_avg_{stat}'] = (
+                df.groupby(['team', 'date'])[stat]
+                .transform(lambda x: (x.sum() - x) / (len(x) - 1) if len(x) > 1 else 0.0)
+            )
+            # Opponent average (opponent team, same date)
+            df[f'feature_opponent_avg_{stat}'] = (
+                df.groupby(['opponent', 'date'])[stat]
+                .transform('mean')
+            )
+        # --- End Teammate and Opponent Rolling Average Features ---
+
+        # Team context features (existing logic)
         df['feature_team_avg_minutes'] = df.groupby(['team', 'date'])['float_minutes'].transform('mean')
         usage_spread = df.groupby(['team', 'date'])['feature_usage_rate'].transform('std')
         if isinstance(usage_spread, pd.Series):
             df['feature_team_usage_spread'] = usage_spread.fillna(0.05)
         else:
             df['feature_team_usage_spread'] = pd.Series([0.05] * len(df), index=df.index)
-        
         # Player role indicators (using lagged stats to avoid leakage)
         scorer_base = pd.Series(0.0, index=df.index)
         if 'feature_season_avg_points' in df.columns:
@@ -586,7 +656,6 @@ class WNBAFeatureEngineer:
             else:
                 scorer_base = pd.Series(scorer_col, index=df.index)
         df['feature_primary_scorer'] = (scorer_base > df['feature_team_avg_minutes'] * 0.6).astype(int)
-        
         return df
 
     def _estimate_team_strength(self, df: pd.DataFrame) -> pd.DataFrame:

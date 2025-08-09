@@ -233,6 +233,16 @@ class DataManager:
         
         return file_paths
     
+    def fetch_all_seasons_data(self, years: List[int], force_refresh: bool = False) -> Dict[int, Dict[str, str]]:
+        """
+        Fetch data for all specified years.
+        Returns a dict mapping year to file paths dict.
+        """
+        all_files = {}
+        for year in years:
+            all_files[year] = self.fetch_season_data(year, force_refresh=force_refresh)
+        return all_files
+
     def load_game_logs(self, file_path: Optional[str] = None) -> pd.DataFrame:
         """
         Load game logs from file with validation.
@@ -286,6 +296,29 @@ class DataManager:
             
         except Exception as e:
             raise WNBADataError(f"Failed to load game logs: {e}")
+    
+    def load_all_game_logs(self, years: List[int]) -> pd.DataFrame:
+        """
+        Load and concatenate game logs for all specified years.
+        Returns a single DataFrame.
+        """
+        dfs = []
+        for year in years:
+            # Find all files for this year
+            data_files = list(self.data_dir.glob(f"*{year}*.csv"))
+            for file_path in data_files:
+                try:
+                    df = pd.read_csv(file_path)
+                    if not df.empty:
+                        df = self._clean_game_logs(df)
+                        dfs.append(df)
+                except Exception as e:
+                    self.logger.warning(f"Failed to load {file_path}: {e}")
+        if not dfs:
+            raise WNBADataError(f"No data found for years: {years}")
+        combined = pd.concat(dfs, ignore_index=True)
+        self.logger.info(f"Loaded {len(combined)} total records for years: {years}")
+        return combined
     
     def _clean_game_logs(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -503,6 +536,11 @@ class ModelManager:
             # Analyze training results
             training_summary = self._analyze_training_results(metrics)
             
+            # Print Brier scores for each stat/model
+            for stat, stat_metrics in metrics.items():
+                for model_name, model_metrics in stat_metrics.items():
+                    print(f"{stat} | {model_name}: R² = {model_metrics.r2_score:.3f}, MAE = {model_metrics.mae:.3f}, Brier = {model_metrics.brier_score:.3f}")
+            
             return {
                 'metrics': metrics,
                 'summary': training_summary,
@@ -534,31 +572,26 @@ class ModelManager:
             'warnings': [],
             'recommendations': []
         }
-        
         try:
             avg_scores = {}
-            
             for stat, stat_metrics in metrics.items():
                 if not stat_metrics:
                     summary['warnings'].append(f"No models trained for {stat}")
                     continue
-                
                 # Find best model for this statistic
                 best_model = max(stat_metrics.items(), key=lambda x: x[1].r2_score)
                 summary['best_models'][stat] = {
                     'model': best_model[0],
                     'r2_score': best_model[1].r2_score,
-                    'mae': best_model[1].mae
+                    'mae': best_model[1].mae,
+                    'brier_score': best_model[1].brier_score
                 }
-                
                 # Calculate average R² for this stat
                 avg_r2 = np.mean([m.r2_score for m in stat_metrics.values()])
                 avg_scores[stat] = avg_r2
-                
                 # Check for suspicious scores (data leakage)
                 if avg_r2 > 0.95:
                     summary['warnings'].append(f"Suspiciously high R² for {stat}: {avg_r2:.3f} - possible data leakage")
-            
             # Overall performance assessment
             if avg_scores:
                 overall_r2 = np.mean(list(avg_scores.values()))
@@ -570,7 +603,6 @@ class ModelManager:
                     summary['overall_performance'] = 'fair'
                 else:
                     summary['overall_performance'] = 'poor'
-                
                 # Generate recommendations
                 if overall_r2 < 0.5:
                     summary['recommendations'].append("Consider feature engineering or more data")
@@ -578,11 +610,10 @@ class ModelManager:
                     summary['recommendations'].append("Review feature engineering for data leakage")
                 if overall_r2 > 0.7:
                     summary['recommendations'].append("Models ready for production use")
-            
+            return summary
         except Exception as e:
-            self.logger.warning(f"Error analyzing training results: {e}")
-        
-        return summary
+            summary['warnings'].append(f"Error analyzing training results: {e}")
+            return summary
     
     def load_latest_models(self) -> None:
         """Load the most recent trained models."""
@@ -706,6 +737,7 @@ class PredictionManager:
             if not isinstance(float_minutes, pd.Series):
                 float_minutes = pd.Series(float_minutes)
             team_players['float_minutes'] = float_minutes.fillna(0.0)
+            # Fix: Use correct argument types for sort_values
             team_players = team_players.sort_values(by='float_minutes', ascending=False).head(8)
             
             for _, player_row in team_players.iterrows():
@@ -799,24 +831,16 @@ class WNBADailyPredictor:
     """
     
     def __init__(self, config: Any = None) -> None:
-        """
-        Initialize the daily predictor.
-        
-        Args:
-            config: Prediction configuration
-        """
-        self.config = config or PredictionConfig()
-        
-        # Initialize managers
-        self.data_manager = DataManager()
-        self.model_manager = ModelManager(self.config)
+        # Accept the full WNBAConfig object
+        self.config = config or ConfigLoader.load_config()
+        # DataManager uses the data config
+        self.data_manager = DataManager(self.config.data.data_dir)
+        # ModelManager uses the prediction config
+        self.model_manager = ModelManager(self.config.prediction)
         self.prediction_manager = PredictionManager()
-        
         # Setup logging
         self.logger = logging.getLogger(__name__)
         self.logger.info("🏀 WNBA Daily Predictor initialized")
-        
-        # Setup project structure if utils available
         if UTILS_AVAILABLE:
             try:
                 setup_project_structure()
@@ -824,63 +848,50 @@ class WNBADailyPredictor:
             except Exception as e:
                 self.logger.warning(f"Utils setup failed: {e}")
     
-    def run_full_pipeline(self, year: int, train_models: bool = True, predict_today: bool = True) -> Dict[str, Any]:
+    def run_full_pipeline(self, train_models: bool = True, predict_today: bool = True) -> Dict[str, Any]:
         """
-        Run the complete prediction pipeline.
-        
-        Args:
-            year: Year to fetch training data for
-            train_models: Whether to train new models
-            predict_today: Whether to generate today's predictions
-            
-        Returns:
-            Dictionary with pipeline results
+        Run the complete prediction pipeline using all years from config.
         """
-        self.logger.info(f"🚀 Starting full prediction pipeline for {year}")
-        
+        years = getattr(self.config, 'train_years', [datetime.now().year])
+        self.logger.info(f"🚀 Starting full prediction pipeline for years: {years}")
         results = {
             'pipeline_start_time': datetime.now(),
-            'year': year,
+            'years': years,
             'steps_completed': [],
             'warnings': [],
             'errors': []
         }
-        
         try:
-            # Step 1: Check data availability
-            self.logger.info("📊 Step 1: Checking data availability")
-            availability = self.data_manager.check_data_availability(year)
-            results['data_availability'] = availability
+            # Step 1: Check data availability for all years
+            self.logger.info("📊 Step 1: Checking data availability for all years")
+            availabilities = {year: self.data_manager.check_data_availability(year) for year in years}
+            results['data_availability'] = availabilities
             results['steps_completed'].append('data_availability_check')
-            
             # Step 2: Fetch season data if needed
-            if availability['total_records'] < 100:
-                self.logger.info("📥 Step 2: Fetching season data")
+            need_fetch = any(a['total_records'] < 100 for a in availabilities.values())
+            if need_fetch:
+                self.logger.info("📥 Step 2: Fetching season data for missing years")
                 try:
-                    file_paths = self.data_manager.fetch_season_data(year)
-                    results['data_files'] = file_paths
+                    fetched = self.data_manager.fetch_all_seasons_data(years)
+                    results['data_files'] = fetched
                     results['steps_completed'].append('data_fetch')
                 except Exception as e:
                     error_msg = f"Data fetching failed: {e}"
                     results['errors'].append(error_msg)
                     self.logger.error(error_msg)
             else:
-                self.logger.info("📊 Step 2: Using existing data")
+                self.logger.info("📊 Step 2: Using existing data for all years")
                 results['steps_completed'].append('data_existing')
-            
             # Step 3: Train models if requested
             if train_models:
-                self.logger.info("🤖 Step 3: Training models")
+                self.logger.info("🤖 Step 3: Training models on all years")
                 try:
-                    game_logs_df = self.data_manager.load_game_logs()
+                    game_logs_df = self.data_manager.load_all_game_logs(years)
                     training_results = self.model_manager.train_models(game_logs_df)
                     results['training_results'] = training_results
                     results['steps_completed'].append('model_training')
-                    
-                    # Check for warnings
                     if training_results['summary'].get('warnings'):
                         results['warnings'].extend(training_results['summary']['warnings'])
-                        
                 except Exception as e:
                     error_msg = f"Model training failed: {e}"
                     results['errors'].append(error_msg)
@@ -894,23 +905,19 @@ class WNBADailyPredictor:
                     warning_msg = f"Model loading failed: {e}"
                     results['warnings'].append(warning_msg)
                     self.logger.warning(warning_msg)
-            
             # Step 4: Generate today's predictions
             if predict_today:
                 self.logger.info("🔮 Step 4: Generating predictions")
                 try:
                     schedule, is_real_data = self.data_manager.get_todays_schedule()
-                    
                     if schedule:
                         predictions = self.prediction_manager.generate_game_predictions(
                             schedule, self.model_manager, self.data_manager
                         )
-                        
                         if predictions:
                             export_path = self.prediction_manager.export_predictions(
                                 predictions, is_real_data
                             )
-                            
                             results['predictions'] = {
                                 'file_path': export_path,
                                 'count': len(predictions),
@@ -918,45 +925,37 @@ class WNBADailyPredictor:
                                 'games': len(schedule)
                             }
                             results['steps_completed'].append('prediction_generation')
-                            
                             if not is_real_data:
                                 results['warnings'].append("Predictions based on sample schedule data")
                         else:
                             results['warnings'].append("No predictions generated")
                     else:
                         results['warnings'].append("No games scheduled for today")
-                        
                 except Exception as e:
                     error_msg = f"Prediction generation failed: {e}"
                     results['errors'].append(error_msg)
                     self.logger.error(error_msg)
-            
             # Pipeline completion
             results['pipeline_end_time'] = datetime.now()
             results['pipeline_duration'] = (results['pipeline_end_time'] - results['pipeline_start_time']).total_seconds()
-            
             # Success assessment
             critical_steps = ['data_availability_check']
             if train_models:
                 critical_steps.append('model_training')
             if predict_today:
                 critical_steps.append('prediction_generation')
-            
             critical_completed = [step for step in critical_steps if step in results['steps_completed']]
             results['success_rate'] = len(critical_completed) / len(critical_steps)
-            
             if results['success_rate'] == 1.0:
                 self.logger.info("🎉 Pipeline completed successfully!")
             elif results['success_rate'] >= 0.7:
                 self.logger.info(f"⚠️ Pipeline completed with warnings ({results['success_rate']:.1%} success)")
             else:
                 self.logger.error(f"❌ Pipeline failed ({results['success_rate']:.1%} success)")
-            
         except Exception as e:
             error_msg = f"Pipeline failed with unexpected error: {e}"
             results['errors'].append(error_msg)
             self.logger.error(error_msg)
-        
         return results
 
 
@@ -967,83 +966,73 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main_application.py --check-data 2025
-  python main_application.py --fetch-data 2025
-  python main_application.py --train 2025
+  python main_application.py --check-data
+  python main_application.py --fetch-data
+  python main_application.py --train
   python main_application.py --predict
-  python main_application.py --full-pipeline 2025
+  python main_application.py --full-pipeline
         """
     )
-    
-    # Action arguments
-    parser.add_argument('--check-data', type=int, metavar='YEAR', help='Check data availability for year')
-    parser.add_argument('--fetch-data', type=int, metavar='YEAR', help='Fetch season data for year')
-    parser.add_argument('--train', type=int, metavar='YEAR', help='Train models using data from year')
+    parser.add_argument('--check-data', action='store_true', help='Check data availability for all years in config')
+    parser.add_argument('--fetch-data', action='store_true', help='Fetch season data for all years in config')
+    parser.add_argument('--train', action='store_true', help='Train models using data from all years in config')
     parser.add_argument('--predict', action='store_true', help='Generate predictions for today')
-    parser.add_argument('--full-pipeline', type=int, metavar='YEAR', help='Run complete pipeline for year')
-    
-    # Options
+    parser.add_argument('--full-pipeline', action='store_true', help='Run complete pipeline for all years in config')
     parser.add_argument('--config', type=str, help='Path to configuration file')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
     parser.add_argument('--no-train', action='store_true', help='Skip training in full pipeline')
     parser.add_argument('--no-predict', action='store_true', help='Skip prediction in full pipeline')
-    
     args = parser.parse_args()
-    
-    # Setup logging
     log_level = "DEBUG" if args.verbose else "INFO"
     if UTILS_AVAILABLE:
         setup_logging(log_level=log_level)
     else:
         logging.basicConfig(level=getattr(logging, log_level))
-    
-    # Load configuration from file (default: config.toml or user-supplied)
-    # NOTE: The config file now controls all prediction targets and settings. Hardcoded values are removed.
     config_path = args.config if args.config else None
     wnba_config = ConfigLoader.load_config(config_path)
-    prediction_config = wnba_config.prediction
-    
     print("\U0001F3C0 Enhanced WNBA Daily Game Prediction System")
     print("=" * 60)
-    
     try:
-        # Initialize predictor with config from file
-        predictor = WNBADailyPredictor(config=prediction_config)
-        
-        # Execute requested action
+        # Pass the full config object to the predictor
+        predictor = WNBADailyPredictor(config=wnba_config)
+        years = wnba_config.data.train_years
         if args.check_data:
-            availability = predictor.data_manager.check_data_availability(args.check_data)
-            print(f"\n📊 Data Availability for {args.check_data}:")
-            print(f"   Files found: {len(availability['files_found'])}")
-            print(f"   Total records: {availability['total_records']}")
-            print(f"   Data quality: {availability['data_quality']}")
-            if availability['teams_found']:
-                print(f"   Teams: {', '.join(availability['teams_found'][:5])}{'...' if len(availability['teams_found']) > 5 else ''}")
-        
+            availabilities = {year: predictor.data_manager.check_data_availability(year) for year in years}
+            print(f"\n📊 Data Availability:")
+            for year, availability in availabilities.items():
+                print(f"  {year}: {len(availability['files_found'])} files, {availability['total_records']} records, quality: {availability['data_quality']}")
         elif args.fetch_data:
-            file_paths = predictor.data_manager.fetch_season_data(args.fetch_data)
-            print(f"\n📁 Data Files for {args.fetch_data}:")
-            for data_type, path in file_paths.items():
-                print(f"   {data_type}: {path}")
-        
+            fetched = predictor.data_manager.fetch_all_seasons_data(years)
+            print(f"\n📁 Data Files:")
+            for year, files in fetched.items():
+                print(f"  {year}: {list(files.keys())}")
         elif args.train:
-            game_logs_df = predictor.data_manager.load_game_logs()
+            game_logs_df = predictor.data_manager.load_all_game_logs(years)
             results = predictor.model_manager.train_models(game_logs_df)
             print(f"\n🤖 Training Results:")
-            print(f"   Performance: {results['summary'].get('overall_performance', 'unknown')}")
+            print(f"  Performance: {results['summary'].get('overall_performance', 'unknown')}")
             if results['summary'].get('warnings'):
-                print(f"   Warnings: {len(results['summary']['warnings'])}")
+                print(f"  Warnings: {len(results['summary']['warnings'])}")
             if results['summary'].get('best_models'):
-                print(f"   Best models trained for: {list(results['summary']['best_models'].keys())}")
-        
+                print(f"  Best models trained for: {list(results['summary']['best_models'].keys())}")
+                for stat, best in results['summary']['best_models'].items():
+                    print(f"    {stat}: {best['model']} | R² = {best['r2_score']:.3f}, MAE = {best['mae']:.3f}, Brier = {best['brier_score']:.3f}")
+            # Print Brier scores by threshold if available
+            if 'validation_report' in results:
+                import json
+                with open(results['validation_report'], 'r') as f:
+                    report = json.load(f)
+                for stat, stat_summary in report.get('summary', {}).items():
+                    if 'brier_scores_by_threshold' in stat_summary:
+                        print(f"    {stat} Brier by threshold:")
+                        for thresh, brier in stat_summary['brier_scores_by_threshold'].items():
+                            print(f"      Threshold {thresh}: Brier = {brier:.3f}")
         elif args.predict:
-            # Attempt to load the latest trained models
             try:
                 predictor.model_manager.load_latest_models()
                 print("✅ Loaded latest models")
             except Exception as e:
                 print(f"⚠️ Warning: Failed to load models: {e}. Using sample predictions.")
-            # Proceed with prediction generation
             schedule, is_real_data = predictor.data_manager.get_todays_schedule()
             if not schedule:
                 print(f"\n📅 No games scheduled for today")
@@ -1059,35 +1048,27 @@ Examples:
                     print(f"   Games: {len(schedule)}")
                 else:
                     print(f"\n❌ No predictions generated")
-        
         elif args.full_pipeline:
             results = predictor.run_full_pipeline(
-                year=args.full_pipeline,
                 train_models=not args.no_train,
                 predict_today=not args.no_predict
             )
-            
             print(f"\n🎉 Pipeline Results:")
             print(f"   Success rate: {results['success_rate']:.1%}")
             print(f"   Steps completed: {len(results['steps_completed'])}")
-            
             if results.get('warnings'):
                 print(f"   Warnings: {len(results['warnings'])}")
                 for warning in results['warnings'][:3]:
                     print(f"     • {warning}")
-            
             if results.get('errors'):
                 print(f"   Errors: {len(results['errors'])}")
                 for error in results['errors'][:3]:
                     print(f"     • {error}")
-            
             if results.get('predictions'):
                 pred_info = results['predictions']
                 print(f"   Predictions: {pred_info['count']} players, {pred_info['games']} games")
-        
         else:
             parser.print_help()
-    
     except Exception as e:
         print(f"\n💥 Error: {e}")
         if args.verbose:

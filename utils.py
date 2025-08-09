@@ -17,6 +17,7 @@ from typing import List, Dict, Any, Optional, Union
 import pandas as pd
 from datetime import datetime, date
 from team_mapping import TeamNameMapper
+import numpy as np
 
 
 def ensure_directories_exist(directories: List[str]) -> None:
@@ -206,9 +207,12 @@ def log_dataframe_info(df: pd.DataFrame, name: str = "DataFrame") -> None:
     logging.info(f"  Columns: {list(df.columns)}")
     
     if not df.empty:
-        logging.info(f"  Date range: {df.get('date', pd.Series()).min()} to {df.get('date', pd.Series()).max()}")
-        logging.info(f"  Players: {df.get('player', pd.Series()).nunique()}")
-        logging.info(f"  Teams: {df.get('team', pd.Series()).nunique()}")
+        date_series = df['date'] if 'date' in df.columns else pd.Series()
+        player_series = df['player'] if 'player' in df.columns else pd.Series()
+        team_series = df['team'] if 'team' in df.columns else pd.Series()
+        logging.info(f"  Date range: {date_series.min()} to {date_series.max()}")
+        logging.info(f"  Players: {player_series.nunique()}")
+        logging.info(f"  Teams: {team_series.nunique()}")
 
 
 def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None) -> None:
@@ -333,6 +337,28 @@ def mmss_to_float(val: Any) -> float:
         return float(val_str) if val_str.replace('.', '', 1).isdigit() else 0.0
     except Exception:
         return 0.0
+
+
+def brier_score_regression(
+    actual: Union[np.ndarray, list],
+    predicted: Union[np.ndarray, list],
+    threshold: float
+) -> float:
+    """
+    Compute the Brier score for regression predictions at a given threshold.
+    Treats the problem as binary: did the stat exceed the threshold?
+    Args:
+        actual: Array of actual values
+        predicted: Array of predicted values
+        threshold: Threshold for binary event (e.g., 10 points)
+    Returns:
+        Brier score (float)
+    """
+    actual = np.asarray(actual)
+    predicted = np.asarray(predicted)
+    binary_actual = (actual > threshold).astype(int)
+    binary_pred = (predicted > threshold).astype(float)
+    return float(np.mean((binary_pred - binary_actual) ** 2))
 
 
 if __name__ == "__main__":
