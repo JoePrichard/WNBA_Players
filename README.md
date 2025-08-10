@@ -71,6 +71,13 @@ If you want to visualize predictions:
 streamlit run dashboard.py
 ```
 
+If Streamlit warns about invalid config options, ensure your project config file is named `wnba_config.toml` (not `config.toml`) to avoid conflicts with Streamlit's own config. You can customize training years via:
+
+```toml
+[data]
+train_years = [2018, 2019, 2021, 2022, 2023, 2024, 2025]
+```
+
 ## Multi-Season Training
 
 To train models on multiple seasons, specify the years in your config file under the [data] section:

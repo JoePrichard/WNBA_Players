@@ -483,7 +483,8 @@ class ConfigLoader:
             WNBAConfigurationError: If configuration loading or validation fails
         """
         if config_path is None:
-            config_path = "config.toml"
+            # Use project-specific config filename to avoid conflicts with Streamlit's config
+            config_path = "wnba_config.toml"
         
         # Start with defaults
         config = WNBAConfig()
@@ -641,7 +642,7 @@ class ConfigLoader:
         return config
     
     @staticmethod
-    def save_config(config: WNBAConfig, config_path: str = "config.toml") -> None:
+    def save_config(config: WNBAConfig, config_path: str = "wnba_config.toml") -> None:
         """
         Save configuration to TOML file.
         
@@ -672,7 +673,7 @@ class ConfigLoader:
             raise WNBAConfigurationError(f"Failed to save config to {config_path}: {e}")
     
     @staticmethod
-    def create_sample_config(config_path: str = "sample_config.toml") -> str:
+    def create_sample_config(config_path: str = "sample_wnba_config.toml") -> str:
         """
         Create a sample configuration file with documentation.
         

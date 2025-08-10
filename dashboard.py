@@ -26,7 +26,7 @@ current_dir = Path(__file__).parent.absolute()
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
-# Page configuration
+# Page configuration (set early, prior to heavy imports)
 st.set_page_config(
     page_title="WNBA Daily Game Predictions",
     page_icon="🏀",
@@ -248,7 +248,12 @@ class WNBADashboard:
         """
         try:
             if DATA_MODELS_AVAILABLE:
-                self.config = PredictionConfig()
+                # Prefer full project config if available
+                try:
+                    from config_loader import ConfigLoader
+                    self.config = ConfigLoader.load_config()
+                except Exception:
+                    self.config = PredictionConfig()
             
             if MAIN_APP_AVAILABLE and self.config:
                 self.predictor = WNBADailyPredictor(config=self.config)

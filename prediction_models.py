@@ -24,11 +24,18 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import xgboost as xgb
 import lightgbm as lgb
 
-# Neural Network
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+# Neural Network (delay heavy imports until actually used)
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    from torch.utils.data import Dataset, DataLoader
+except Exception:  # pragma: no cover - allow dashboard to run without torch
+    torch = None
+    nn = None
+    optim = None
+    Dataset = object  # type: ignore
+    DataLoader = None
 
 from data_models import (
     PlayerPrediction, ModelMetrics, PredictionConfig, ModelType,
@@ -52,6 +59,8 @@ class StatsDataset(Dataset):
             X: Feature array
             y: Target array
         """
+        if torch is None:
+            raise RuntimeError("PyTorch is required for neural network components but is not installed.")
         self.X = torch.FloatTensor(X)
         self.y = torch.FloatTensor(y)
     
@@ -85,6 +94,8 @@ class StatsNeuralNetwork(nn.Module):
             hidden_dims: List of hidden layer dimensions
             dropout_rate: Dropout rate for uncertainty
         """
+        if nn is None:
+            raise RuntimeError("PyTorch is required for neural network components but is not installed.")
         super().__init__()
         
         layers = []
@@ -125,6 +136,8 @@ class StatsNeuralNetwork(nn.Module):
         Returns:
             Tuple of (mean_prediction, uncertainty)
         """
+        if torch is None:
+            raise RuntimeError("PyTorch is required for neural network components but is not installed.")
         self.train()  # Enable dropout
         predictions = []
         

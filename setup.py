@@ -194,7 +194,7 @@ class WNBASetup:
         """
         logger.info("Creating basic configuration...")
         
-        config_file = "config.toml"
+        config_file = "wnba_config.toml"
         
         if os.path.exists(config_file):
             logger.info("✅ Configuration file already exists")
@@ -478,7 +478,7 @@ log_file = "logs/wnba_predictions.log"
     def _print_next_steps(self) -> None:
         """Print next steps for the user."""
         logger.info("\n📋 Next Steps:")
-        logger.info("1. 🔧 Review config.toml and customize if needed")
+        logger.info("1. 🔧 Review wnba_config.toml and customize if needed")
         logger.info("2. 📊 Test data fetching: python main_application.py --check-data 2025")
         logger.info("3. 🤖 Try sample run: python main_application.py --predict") 
         logger.info("4. 🚀 Launch dashboard: streamlit run dashboard.py")

@@ -1,3 +1,5 @@
+server.fileWatcherType = "poll"
+browser.gatherUsageStats = false
 # WNBA Prediction System Configuration
 
 [prediction]

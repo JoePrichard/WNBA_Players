@@ -8,6 +8,7 @@ numpy>=1.21.0
 scikit-learn>=1.0.0
 xgboost>=1.5.0
 lightgbm>=3.3.0
+# torch is optional for dashboard; required for neural network training only
 torch>=1.10.0
 optuna>=3.0.0
 
@@ -24,7 +25,8 @@ matplotlib>=3.3.0
 seaborn>=0.11.0
 
 # Dashboard and web interface
-streamlit>=1.2.0
+# Streamlit watcher inotify + PyTorch can conflict; pin to >=1.33 for file watcher improvements
+streamlit>=1.33.0
 plotly>=5.3.0
 
 # Model persistence

@@ -63,12 +63,8 @@ except ImportError as e:
     print(f"Error importing schedule_fetcher: {e}")
     SCHEDULE_FETCHER_AVAILABLE = False
 
-try:
-    from prediction_models import WNBAPredictionModel
-    PREDICTION_MODELS_AVAILABLE = True
-except ImportError as e:
-    print(f"Error importing prediction_models: {e}")
-    PREDICTION_MODELS_AVAILABLE = False
+# Defer importing prediction models (and heavy ML libraries) until needed
+PREDICTION_MODELS_AVAILABLE = None  # Determined lazily inside ModelManager
 
 try:
     from utils import setup_project_structure, setup_logging
@@ -498,12 +494,25 @@ class ModelManager:
         self.logger = logging.getLogger(f"{__name__}.ModelManager")
         
         self.prediction_model = None
-        if PREDICTION_MODELS_AVAILABLE:
-            try:
-                self.prediction_model = WNBAPredictionModel(config=self.config, model_save_dir=str(self.model_dir))
-                self.logger.info("✅ Prediction model initialized")
-            except Exception as e:
-                self.logger.error(f"❌ Prediction model failed: {e}")
+        # Do not import heavy ML libraries here; import only when needed
+        self.logger.debug("ModelManager initialized without loading ML backends (lazy mode)")
+
+    def _ensure_model_loaded(self) -> None:
+        """Lazily import and construct the prediction model when first needed."""
+        if self.prediction_model is not None:
+            return
+        try:
+            from prediction_models import WNBAPredictionModel  # type: ignore
+            global PREDICTION_MODELS_AVAILABLE
+            PREDICTION_MODELS_AVAILABLE = True
+            self.prediction_model = WNBAPredictionModel(
+                config=self.config,
+                model_save_dir=str(self.model_dir)
+            )
+            self.logger.info("✅ Prediction model initialized")
+        except Exception as e:
+            PREDICTION_MODELS_AVAILABLE = False
+            raise WNBAModelError(f"Failed to initialize prediction model: {e}")
     
     def train_models(self, game_logs_df: pd.DataFrame, save_models: bool = True) -> Dict[str, Any]:
         """
@@ -517,7 +526,7 @@ class ModelManager:
             Training metrics and results
         """
         if not self.prediction_model:
-            raise WNBAModelError("Prediction model not available")
+            self._ensure_model_loaded()
         
         self.logger.info("Starting model training")
         
@@ -618,7 +627,7 @@ class ModelManager:
     def load_latest_models(self) -> None:
         """Load the most recent trained models."""
         if not self.prediction_model:
-            raise WNBAModelError("Prediction model not available")
+            self._ensure_model_loaded()
         
         try:
             model_dirs = list(self.model_dir.glob("models_*"))
@@ -852,7 +861,8 @@ class WNBADailyPredictor:
         """
         Run the complete prediction pipeline using all years from config.
         """
-        years = getattr(self.config, 'train_years', [datetime.now().year])
+        # Use years from data configuration
+        years = list(getattr(self.config.data, 'train_years', [datetime.now().year]))
         self.logger.info(f"🚀 Starting full prediction pipeline for years: {years}")
         results = {
             'pipeline_start_time': datetime.now(),
@@ -867,12 +877,19 @@ class WNBADailyPredictor:
             availabilities = {year: self.data_manager.check_data_availability(year) for year in years}
             results['data_availability'] = availabilities
             results['steps_completed'].append('data_availability_check')
-            # Step 2: Fetch season data if needed
-            need_fetch = any(a['total_records'] < 100 for a in availabilities.values())
-            if need_fetch:
-                self.logger.info("📥 Step 2: Fetching season data for missing years")
+            # Step 2: Fetch season data only for years not already present in data directory
+            from pathlib import Path as _Path
+            data_dir_path = _Path(self.data_manager.data_dir)
+            missing_years = []
+            for y in years:
+                # Consider data present if any CSV for the year exists (e.g., wnba_stats_{y}.csv)
+                has_any_year_file = any(data_dir_path.glob(f"*{y}*.csv"))
+                if not has_any_year_file:
+                    missing_years.append(y)
+            if missing_years:
+                self.logger.info(f"📥 Step 2: Fetching season data for missing years: {missing_years}")
                 try:
-                    fetched = self.data_manager.fetch_all_seasons_data(years)
+                    fetched = self.data_manager.fetch_all_seasons_data(missing_years)
                     results['data_files'] = fetched
                     results['steps_completed'].append('data_fetch')
                 except Exception as e:
@@ -880,7 +897,7 @@ class WNBADailyPredictor:
                     results['errors'].append(error_msg)
                     self.logger.error(error_msg)
             else:
-                self.logger.info("📊 Step 2: Using existing data for all years")
+                self.logger.info("📊 Step 2: All configured years already present in data directory")
                 results['steps_completed'].append('data_existing')
             # Step 3: Train models if requested
             if train_models:
